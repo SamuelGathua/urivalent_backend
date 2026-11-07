@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Urivalent AI Intelligence Briefing</title>
+  <style>
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }
+    body { margin: 0; padding: 0; width: 100% !important; background-color: #0F352E; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #FFFFFF; }
+    .wrapper { width: 100%; table-layout: fixed; background-color: #0F352E; padding-bottom: 40px; }
+    .main-table { width: 100%; max-width: 680px; margin: 0 auto; background-color: #164A41; border-collapse: separate; border-radius: 8px; overflow: hidden; }
+    .ticker-pill { display: inline-block; padding: 4px 8px; margin: 2px 4px; border-radius: 4px; background-color: #0F352E; font-size: 11px; font-weight: bold; border: 1px solid #9DC88D; }
+    .pill-up { color: #00E676; }
+    .pill-down { color: #FF5252; }
+    .ticker-arxiv { display: inline-block; padding: 4px 10px; border-radius: 4px; background-color: #0F352E; border: 1px solid #F1B24A; color: #F1B24A; font-size: 11px; font-weight: bold; }
+    .card-tier1 { background-color: #4D774E; border: 2px solid #F1B24A; border-radius: 6px; padding: 18px; margin-bottom: 18px; }
+    .card-pillar { background-color: #4D774E; border: 1px solid #9DC88D; border-radius: 6px; padding: 14px; margin-bottom: 12px; }
+    .card-inset { background-color: #164A41; border: 1px solid #9DC88D; border-radius: 4px; padding: 12px; margin-top: 12px; margin-bottom: 12px; }
+    .chip-entity { display: inline-block; background-color: #164A41; color: #FFFFFF; padding: 3px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; text-transform: uppercase; border: 1px solid #9DC88D; }
+    .chip-score { display: inline-block; background-color: #0F352E; color: #F1B24A; padding: 3px 8px; border-radius: 3px; font-size: 11px; font-weight: bold; border: 1px solid #F1B24A; }
+    .chip-hype { display: inline-block; background-color: #164A41; color: #9DC88D; padding: 3px 8px; border-radius: 3px; font-size: 11px; border: 1px solid #9DC88D; }
+    .badge-silicon { background-color: #2979FF; color: #FFFFFF; }
+    .badge-energy { background-color: #FF9100; color: #FFFFFF; }
+    .badge-models { background-color: #00E676; color: #0F352E; font-weight: bold; }
+    .badge-agents { background-color: #F1B24A; color: #0F352E; font-weight: bold; }
+    .badge-capital { background-color: #9DC88D; color: #0F352E; font-weight: bold; }
+    .badge-policy { background-color: #AA00FF; color: #FFFFFF; }
+    .btn-link { color: #F1B24A; text-decoration: none; font-size: 12px; font-weight: bold; }
+    .btn-link:hover { text-decoration: underline; }
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #0F352E; color: #FFFFFF;">
+  <center class="wrapper" style="width: 100%; background-color: #0F352E; padding-top: 20px; padding-bottom: 40px;">
+    <table class="main-table" width="100%" cellpadding="0" cellspacing="0" style="max-width: 680px; background-color: #164A41; border: 1px solid #9DC88D; border-radius: 8px;">
+      
+      <!-- HEADER -->
+      <tr>
+        <td style="padding: 24px 28px 16px 28px; border-bottom: 2px solid #9DC88D; text-align: left;">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td valign="middle" style="width: 50%;">
+                <img src="{{ logo_url }}" alt="Urivalent Logo" width="170" style="display: block; max-width: 170px; height: auto;" />
+              </td>
+              <td valign="middle" style="width: 50%; text-align: right;">
+                <div style="font-size: 12px; color: #9DC88D; text-transform: uppercase; letter-spacing: 1px; font-weight: bold;">{{ formatted_date }}</div>
+                <div style="font-size: 11px; color: #F1B24A; font-weight: 600; margin-top: 4px;">Zero-Cost Intelligence Pipeline</div>
+              </td>
+            </tr>
+          </table>
+          <div style="margin-top: 16px; font-size: 15px; font-style: italic; color: #FFFFFF; border-left: 3px solid #F1B24A; padding-left: 12px;">
+            "{{ greeting }}"
+          </div>
+        </td>
+      </tr>
+
+      <!-- TOP BAR: THE COMPUTE & CAPITAL TICKER -->
+      <tr>
+        <td style="padding: 14px 24px; background-color: #0F352E; border-bottom: 1px solid #9DC88D;">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="font-size: 11px; text-transform: uppercase; color: #9DC88D; font-weight: bold; letter-spacing: 0.5px; padding-bottom: 6px;">
+                ⚡ THE COMPUTE & CAPITAL TICKER (24H MARKET ACTION)
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <div style="line-height: 26px;">
+                  {% for t in market_tickers %}
+                  <span class="ticker-pill">
+                    {{ t.ticker }}: ${{ "%.2f"|format(t.close_price) }}
+                    <span class="{% if t.daily_change_pct >= 0 %}pill-up{% else %}pill-down{% endif %}">
+                      {{ "%+.2f"|format(t.daily_change_pct) }}%
+                    </span>
+                  </span>
+                  {% endfor %}
+                  <span class="ticker-arxiv">
+                    📄 Total 24h arXiv AI Papers: {{ total_arxiv_count }}
+                  </span>
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- MAIN CONTENT WRAPPER -->
+      <tr>
+        <td style="padding: 24px;">
+
+          <!-- SECTION 1: TIER-1 BREAKTHROUGHS -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+            <tr>
+              <td style="padding-bottom: 12px;">
+                <span style="font-size: 16px; font-weight: bold; color: #F1B24A; text-transform: uppercase; letter-spacing: 1px;">
+                  🚨 SECTION 1 — TIER-1 BREAKTHROUGHS
+                </span>
+                <span style="font-size: 12px; color: #9DC88D; margin-left: 8px;">(Signal Score &ge; 8/10)</span>
+              </td>
+            </tr>
+
+            {% if tier1_items %}
+              {% for item in tier1_items %}
+              <tr>
+                <td>
+                  <div class="card-tier1">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 10px;">
+                      <tr>
+                        <td align="left">
+                          <span style="display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 10px; font-weight: bold; text-transform: uppercase; margin-right: 6px; 
+                            {% if '[SILICON' in item.pillar_category %}background-color: #2979FF; color: #FFF;
+                            {% elif '[ENERGY' in item.pillar_category %}background-color: #FF9100; color: #FFF;
+                            {% elif '[MODELS' in item.pillar_category %}background-color: #00E676; color: #0F352E;
+                            {% elif '[AGENTS' in item.pillar_category %}background-color: #F1B24A; color: #0F352E;
+                            {% elif '[CAPITAL' in item.pillar_category %}background-color: #9DC88D; color: #0F352E;
+                            {% else %}background-color: #AA00FF; color: #FFF;{% endif %}">
+                            {{ item.pillar_category }}
+                          </span>
+                          <span class="chip-entity">{{ item.primary_entity }}</span>
+                        </td>
+                        <td align="right">
+                          <span class="chip-score">SIGNAL: {{ item.signal_score }}/10</span>
+                          <span class="chip-hype">{{ item.hype_vs_substance }}</span>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <div style="font-size: 17px; font-weight: bold; color: #FFFFFF; line-height: 1.35; margin-bottom: 8px;">
+                      {{ item.headline }}
+                    </div>
+
+                    <div style="font-size: 14px; color: #E8F5E9; line-height: 1.45; margin-bottom: 10px;">
+                      {{ item.what_happened }}
+                    </div>
+
+                    <div class="card-inset">
+                      <div style="font-size: 13px; color: #FFFFFF; line-height: 1.5; margin-bottom: 6px;">
+                        <strong style="color: #9DC88D;">⚙️ The Engineering:</strong> {{ item.technical_summary }}
+                      </div>
+                      <div style="font-size: 13px; color: #FFFFFF; line-height: 1.5;">
+                        <strong style="color: #F1B24A;">📈 The Business:</strong> {{ item.strategic_implication }}
+                      </div>
+                    </div>
+
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top: 8px;">
+                      <tr>
+                        <td align="left" style="font-size: 12px; color: #9DC88D;">
+                          Sources:
+                          {% for src in item.parsed_sources %}
+                          <a href="{{ src.link }}" class="btn-link" target="_blank" style="margin-right: 10px;">
+                            [{{ src.source }} &rarr;]
+                          </a>
+                          {% endfor %}
+                        </td>
+                      </tr>
+                    </table>
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+            {% else %}
+              <tr>
+                <td>
+                  <div style="padding: 16px; background-color: #4D774E; border-radius: 6px; font-size: 13px; color: #E8F5E9;">
+                    No Tier-1 breakthroughs surpassed the &ge; 8/10 threshold in the current cycle. All sector updates are indexed below.
+                  </div>
+                </td>
+              </tr>
+            {% endif %}
+          </table>
+
+          <!-- SECTION 2: SECTOR PILLARS -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px;">
+            <tr>
+              <td style="padding-bottom: 12px;">
+                <span style="font-size: 16px; font-weight: bold; color: #9DC88D; text-transform: uppercase; letter-spacing: 1px;">
+                  🌐 SECTION 2 — SECTOR PILLARS
+                </span>
+                <span style="font-size: 12px; color: #FFFFFF; margin-left: 8px;">(Categorical Intelligence)</span>
+              </td>
+            </tr>
+
+            {% for pillar_name, pillar_items in pillar_groups.items() %}
+              {% if pillar_items %}
+              <tr>
+                <td style="padding-top: 8px; padding-bottom: 6px;">
+                  <span style="display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase;
+                    {% if '[SILICON' in pillar_name %}background-color: #2979FF; color: #FFFFFF;
+                    {% elif '[ENERGY' in pillar_name %}background-color: #FF9100; color: #FFFFFF;
+                    {% elif '[MODELS' in pillar_name %}background-color: #00E676; color: #0F352E;
+                    {% elif '[AGENTS' in pillar_name %}background-color: #F1B24A; color: #0F352E;
+                    {% elif '[CAPITAL' in pillar_name %}background-color: #9DC88D; color: #0F352E;
+                    {% else %}background-color: #AA00FF; color: #FFFFFF;{% endif %}">
+                    {{ pillar_name }}
+                  </span>
+                </td>
+              </tr>
+
+              {% for item in pillar_items %}
+              <tr>
+                <td>
+                  <div class="card-pillar">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 6px;">
+                      <tr>
+                        <td align="left">
+                          <span class="chip-entity" style="font-size: 10px;">{{ item.primary_entity }}</span>
+                          <span style="font-size: 11px; color: #9DC88D; margin-left: 6px;">Signal: {{ item.signal_score }}/10</span>
+                        </td>
+                        <td align="right">
+                          <span class="chip-hype" style="font-size: 10px;">{{ item.hype_vs_substance }}</span>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <div style="font-size: 15px; font-weight: 600; color: #FFFFFF; line-height: 1.3; margin-bottom: 4px;">
+                      {{ item.headline }}
+                    </div>
+                    <div style="font-size: 13px; color: #E8F5E9; line-height: 1.4; margin-bottom: 6px;">
+                      {{ item.what_happened }}
+                    </div>
+
+                    <div style="font-size: 11px; color: #9DC88D;">
+                      {% for src in item.parsed_sources %}
+                      <a href="{{ src.link }}" class="btn-link" target="_blank" style="margin-right: 8px;">
+                        [{{ src.source }} &rarr;]
+                      </a>
+                      {% endfor %}
+                    </div>
+                  </div>
+                </td>
+              </tr>
+              {% endfor %}
+              {% endif %}
+            {% endfor %}
+          </table>
+
+          <!-- SECTION 3: THE CODE & PAPER DROP -->
+          <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 12px;">
+            <tr>
+              <td style="padding-bottom: 10px;">
+                <span style="font-size: 16px; font-weight: bold; color: #F1B24A; text-transform: uppercase; letter-spacing: 1px;">
+                  📦 SECTION 3 — THE CODE & PAPER DROP
+                </span>
+                <span style="font-size: 12px; color: #9DC88D; margin-left: 8px;">(High-Velocity Repos & Top Preprints)</span>
+              </td>
+            </tr>
+
+            <!-- GitHub Repos -->
+            {% if trending_repos %}
+            <tr>
+              <td style="padding-bottom: 8px;">
+                <div style="font-size: 13px; font-weight: bold; color: #9DC88D; text-transform: uppercase;">
+                  ⭐ High-Velocity Repositories (GitHub)
+                </div>
+              </td>
+            </tr>
+            {% for repo in trending_repos %}
+            <tr>
+              <td>
+                <div style="background-color: #0F352E; border: 1px solid #9DC88D; border-radius: 4px; padding: 10px; margin-bottom: 8px;">
+                  <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td align="left">
+                        <a href="{{ repo.repo_url }}" target="_blank" style="color: #F1B24A; font-weight: bold; font-size: 14px; text-decoration: none;">
+                          {{ repo.repo_name }}
+                        </a>
+                        <span style="font-size: 11px; color: #9DC88D; margin-left: 6px;">({{ repo.language }})</span>
+                      </td>
+                      <td align="right">
+                        <span style="font-size: 11px; color: #00E676; font-weight: bold;">
+                          ★ {{ "{:,}".format(repo.total_stars) }} (+{{ repo.stars_gained }})
+                        </span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colspan="2" style="font-size: 12px; color: #E8F5E9; padding-top: 4px;">
+                        {{ repo.description }}
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+            {% endif %}
+
+            <!-- Research Papers -->
+            {% if trending_papers %}
+            <tr>
+              <td style="padding-top: 10px; padding-bottom: 8px;">
+                <div style="font-size: 13px; font-weight: bold; color: #9DC88D; text-transform: uppercase;">
+                  📑 Trending Papers (Hugging Face & arXiv)
+                </div>
+              </td>
+            </tr>
+            {% for p in trending_papers %}
+            <tr>
+              <td>
+                <div style="background-color: #0F352E; border: 1px solid #9DC88D; border-radius: 4px; padding: 10px; margin-bottom: 8px;">
+                  <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td align="left">
+                        <a href="{{ p.url }}" target="_blank" style="color: #FFFFFF; font-weight: 600; font-size: 13px; text-decoration: none;">
+                          {{ p.title }}
+                        </a>
+                      </td>
+                      <td align="right" style="white-space: nowrap; padding-left: 8px;">
+                        <span style="font-size: 11px; color: #F1B24A; font-weight: bold;">
+                          [{{ p.source }}{% if p.upvotes %} ▲ {{ p.upvotes }}{% endif %}]
+                        </span>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colspan="2" style="font-size: 12px; color: #9DC88D; padding-top: 4px;">
+                        {{ p.summary[:180] }}...
+                      </td>
+                    </tr>
+                  </table>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+            {% endif %}
+          </table>
+
+        </td>
+      </tr>
+
+      <!-- FOOTER -->
+      <tr>
+        <td style="padding: 24px; background-color: #0F352E; border-top: 2px solid #9DC88D; text-align: center;">
+          <div style="font-size: 12px; color: #9DC88D; margin-bottom: 6px;">
+            You are receiving this intelligence briefing because you are subscribed to <strong>Urivalent</strong>.
+          </div>
+          <div style="font-size: 11px; color: #FFFFFF; margin-bottom: 12px;">
+            Delivered daily at 08:50 AM EAT &bull; Automated Zero-Cost Intelligence Architecture
+          </div>
+          <div style="font-size: 11px;">
+            <a href="{{ unsubscribe_url }}" style="color: #F1B24A; text-decoration: underline;">
+              Unsubscribe Instantly
+            </a>
+            <span style="color: #9DC88D; margin: 0 8px;">&bull;</span>
+            <a href="{{ base_url }}/preview-brief" style="color: #9DC88D; text-decoration: none;">
+              Browser Version
+            </a>
+          </div>
+          <div style="font-size: 10px; color: #9DC88D; margin-top: 14px;">
+            &copy; {{ current_year }} Urivalent. All rights reserved. Built with precision for AI engineers and investors.
+          </div>
+        </td>
+      </tr>
+
+    </table>
+  </center>
+</body>
+</html>
+
