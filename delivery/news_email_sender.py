@@ -272,6 +272,69 @@ def send_daily_news_brief(batch_size: int = 100) -> Dict[str, Any]:
     }
 
 
+def send_test_email(target_email: str) -> Dict[str, Any]:
+    """
+    Test Email Dispatcher:
+    Compiles live briefing using latest intelligence, snapshots, and trending preprints.
+    Dispatches exclusively to the provided target_email via Resend.
+    CRITICAL: Does NOT touch or update is_dispatched in the database.
+    """
+    logger.info(f"Initiating test email dispatch to: {target_email}...")
+
+    html_content = compile_brief_html(subscriber_email=target_email, preview_mode=False)
+    resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
+    sender_email = os.getenv("SENDER_EMAIL", "onboarding@resend.dev")
+    base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+    now_dt = datetime.now(timezone.utc)
+    subject = f"[TEST BRIEF] Urivalent Intelligence Briefing — {now_dt.strftime('%b %d, %Y')}"
+
+    unsub_token = generate_unsubscribe_token(target_email)
+    unsub_url = f"{base_url}/auth/unsubscribe?token={unsub_token}"
+
+    email_payload = {
+        "from": sender_email,
+        "to": [target_email],
+        "subject": subject,
+        "html": html_content,
+        "headers": {
+            "List-Unsubscribe": f"<{unsub_url}>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            "X-Priority": "1",
+            "X-Entity-Ref-ID": f"urivalent-test-{now_dt.strftime('%Y%m%d%H%M%S')}"
+        }
+    }
+
+    if resend_api_key:
+        import resend
+        resend.api_key = resend_api_key
+        try:
+            logger.info(f"Sending test email to {target_email} via Resend API...")
+            resp = resend.Emails.send(email_payload)
+            logger.info(f"Test email sent successfully! Response: {resp}")
+            return {
+                "status": "success",
+                "target_email": target_email,
+                "resend_response": resp,
+                "resend_live": True
+            }
+        except Exception as e:
+            logger.error(f"Failed to dispatch test email via Resend: {e}")
+            return {
+                "status": "error",
+                "target_email": target_email,
+                "error": str(e),
+                "resend_live": True
+            }
+    else:
+        logger.info(f"Simulated test email to {target_email} (RESEND_API_KEY not configured).")
+        return {
+            "status": "success",
+            "target_email": target_email,
+            "resend_live": False,
+            "simulated": True
+        }
+
+
 if __name__ == "__main__":
     html = compile_brief_html(preview_mode=True)
     out_path = Path(__file__).resolve().parent.parent / "preview_output.html"

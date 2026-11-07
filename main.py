@@ -2,12 +2,16 @@ import os
 import sys
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException, Query, Header, Depends
+from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, Form, Body
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
 
 # Ensure backend root on path
 backend_dir = Path(__file__).resolve().parent
@@ -15,7 +19,15 @@ if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
 from database.db_client import db_client
-from delivery.news_email_sender import compile_brief_html, verify_unsubscribe_token
+from delivery.news_email_sender import (
+    compile_brief_html,
+    verify_unsubscribe_token,
+    send_test_email,
+    fetch_intelligence_for_brief,
+    fetch_market_snapshots_for_brief,
+    fetch_code_and_paper_snapshots,
+    get_daily_greeting
+)
 from scheduler_service import (
     start_scheduler,
     stop_scheduler,
@@ -52,10 +64,17 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS Middleware
+# ------------------------------------------------------------------------------
+# 1. CORS CONFIGURATION (NEXT.JS INTEGRATION)
+# ------------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,22 +86,147 @@ if not assets_path.exists():
     assets_path.mkdir(parents=True, exist_ok=True)
 app.mount("/assets", StaticFiles(directory=str(assets_path)), name="assets")
 
+# Initialize Jinja2 Templates
+templates_dir = backend_dir / "templates"
+templates = Jinja2Templates(directory=str(templates_dir))
+
+
+class TestEmailPayload(BaseModel):
+    email: str
+    admin_key: Optional[str] = None
+
 
 # ------------------------------------------------------------------------------
-# 1. ROOT & HEALTH ENDPOINTS
+# 2. PURE REST API: JSON FEED FOR NEXT.JS
 # ------------------------------------------------------------------------------
 
-@app.get("/")
-def root():
-    return {
-        "service": "Urivalent AI Intelligence Pipeline",
-        "status": "online",
-        "version": "1.0.0",
-        "docs_url": "/docs",
-        "health_url": "/health",
-        "preview_url": "/preview-brief"
-    }
+@app.get("/api/feed")
+def get_intelligence_feed():
+    """
+    Pure REST API Feed Endpoint for Next.js Frontend:
+    Returns structured JSON with market_tickers, tier1_items, pillar_groups,
+    trending_repos, trending_papers, total_arxiv_count, formatted_date, and greeting.
+    """
+    try:
+        tier1_items, pillar_groups = fetch_intelligence_for_brief()
+        market_tickers = fetch_market_snapshots_for_brief()
+        trending_repos, trending_papers, arxiv_count = fetch_code_and_paper_snapshots()
 
+        base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+        logo_url = os.getenv("LOGO_URL", f"{base_url}/assets/urivalent_logo.jfif")
+        if not logo_url.startswith("http"):
+            logo_url = f"{base_url}{logo_url}"
+
+        now_dt = datetime.now(timezone.utc)
+        formatted_date = now_dt.strftime("%A, %B %d, %Y")
+
+        return {
+            "status": "success",
+            "metadata": {
+                "service": "Urivalent AI Intelligence Pipeline",
+                "timestamp": now_dt.isoformat(),
+                "formatted_date": formatted_date,
+                "greeting": get_daily_greeting(),
+                "logo_url": logo_url,
+                "total_arxiv_count": arxiv_count
+            },
+            "market_tickers": market_tickers,
+            "tier1_items": tier1_items,
+            "pillar_groups": pillar_groups,
+            "trending_repos": trending_repos,
+            "trending_papers": trending_papers
+        }
+    except Exception as e:
+        logger.error(f"Error compiling API feed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate intelligence feed: {str(e)}")
+
+
+# ------------------------------------------------------------------------------
+# 3. REST ADMIN CONTROLLER ENDPOINTS
+# ------------------------------------------------------------------------------
+
+@app.post("/admin/test-email")
+async def api_test_email(
+    request: Request,
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    """
+    Triggers a test email via Resend strictly to target_email without altering is_dispatched.
+    Accepts JSON body: {"email": "user@example.com", "admin_key": "..."}
+    or Form data: email=...
+    """
+    target_email = None
+    admin_key = x_admin_key
+
+    # Parse JSON or Form body
+    try:
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            body_data = await request.json()
+            target_email = body_data.get("email")
+            admin_key = admin_key or body_data.get("admin_key")
+        else:
+            form_data = await request.form()
+            target_email = form_data.get("email")
+            admin_key = admin_key or form_data.get("admin_key")
+    except Exception as e:
+        logger.warning(f"Error parsing request payload: {e}")
+
+    if not target_email:
+        raise HTTPException(status_code=400, detail="Missing required 'email' field in request.")
+
+    logger.info(f"API admin requested test email for: {target_email}")
+    result = await send_test_email(str(target_email))
+
+    if result.get("status") == "success":
+        return {
+            "status": "success",
+            "message": f"Test briefing successfully dispatched to {target_email}!",
+            "target_email": target_email,
+            "resend_live": result.get("resend_live", False)
+        }
+    else:
+        raise HTTPException(status_code=500, detail=result.get("error", "Failed to dispatch test email."))
+
+
+@app.post("/admin/force-news")
+def api_force_news(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    """Triggers on-demand scraping and synthesis into DB. Returns pure JSON."""
+    logger.info("REST API triggered force-news cycle...")
+    result = run_news_cycle()
+    if result.get("status") == "success":
+        return {
+            "status": "success",
+            "message": f"Ingestion cycle completed successfully! Ingested {result.get('raw_count', 0)} raw items and synthesized {result.get('synthesized_count', 0)} entries.",
+            "data": result
+        }
+    else:
+        raise HTTPException(status_code=500, detail=result.get("error", "Ingestion cycle failed."))
+
+
+@app.post("/admin/send-morning-brief")
+@app.post("/send-daily-news-email")
+def api_send_morning_brief(
+    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+):
+    """Triggers on-demand full scraping, synthesis, and subscriber email dispatch. Returns pure JSON."""
+    logger.info("REST API triggered morning brief delivery cycle...")
+    result = run_daily_morning_brief_job()
+    if result.get("status") == "success":
+        return {
+            "status": "success",
+            "message": "Morning briefing cycle executed and emails dispatched successfully!",
+            "data": result
+        }
+    else:
+        raise HTTPException(status_code=500, detail=result.get("error", "Morning brief execution failed."))
+
+
+# ------------------------------------------------------------------------------
+# 4. HEALTH, PREVIEWS & UNSUBSCRIBE
+# ------------------------------------------------------------------------------
 
 @app.get("/health")
 def health_check():
@@ -119,10 +263,6 @@ def health_check():
     }
 
 
-# ------------------------------------------------------------------------------
-# 2. PREVIEW & AUTH ENDPOINTS
-# ------------------------------------------------------------------------------
-
 @app.get("/preview-brief", response_class=HTMLResponse)
 def preview_brief():
     """Renders the live compiled ai_brief.html directly in the browser."""
@@ -149,7 +289,6 @@ def unsubscribe(token: str = Query(..., description="Signed JWT unsubscribe toke
             status_code=400
         )
 
-    # Deactivate subscription
     db_client.execute("UPDATE users SET is_subscribed = 0 WHERE email = ?;", (email,))
     logger.info(f"Subscriber {email} successfully unsubscribed.")
 
@@ -158,14 +297,11 @@ def unsubscribe(token: str = Query(..., description="Signed JWT unsubscribe toke
         <!DOCTYPE html>
         <html>
         <head><title>Unsubscribed — Urivalent</title></head>
-        <body style="font-family: sans-serif; background: #0F352E; color: #FFFFFF; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0;">
-          <div style="background: #164A41; border: 1px solid #9DC88D; border-radius: 8px; padding: 32px; max-width: 480px; text-align: center;">
+        <body style="font-family: sans-serif; background: #FFFFFF; color: #164A41; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0;">
+          <div style="background: #F8FAF8; border: 1px solid #9DC88D; border-radius: 8px; padding: 32px; max-width: 480px; text-align: center; box-shadow: 0 4px 12px rgba(22, 74, 65, 0.08);">
             <h2 style="color: #F1B24A; margin-top: 0;">Unsubscribed Successfully</h2>
-            <p style="color: #E8F5E9; font-size: 14px; line-height: 1.5;">
+            <p style="color: #4D774E; font-size: 14px; line-height: 1.5;">
               <strong>{email}</strong> has been unsubscribed from the daily Urivalent Intelligence Briefing.
-            </p>
-            <p style="color: #9DC88D; font-size: 12px; margin-top: 24px;">
-              You can re-subscribe at any time from your account preferences.
             </p>
           </div>
         </body>
@@ -175,25 +311,35 @@ def unsubscribe(token: str = Query(..., description="Signed JWT unsubscribe toke
     )
 
 
-# ------------------------------------------------------------------------------
-# 3. ADMINISTRATIVE TRIGGER ENDPOINTS
-# ------------------------------------------------------------------------------
-
-@app.post("/admin/send-morning-brief")
-@app.post("/send-daily-news-email")
-def trigger_morning_brief():
-    """Manual on-demand trigger: Full scraping, LLM synthesis, and batch email dispatch."""
-    logger.info("Manual trigger received for morning brief delivery cycle...")
-    result = run_daily_morning_brief_job()
-    return JSONResponse(content=result, status_code=200 if result.get("status") == "success" else 500)
-
-
-@app.post("/admin/force-news")
-def trigger_force_news():
-    """Manual on-demand trigger: Scraping and synthesis into DB without emailing."""
-    logger.info("Manual trigger received for force-news ingestion cycle...")
-    result = run_news_cycle()
-    return JSONResponse(content=result, status_code=200 if result.get("status") == "success" else 500)
+@app.get("/", response_class=HTMLResponse)
+def fallback_home(request: Request):
+    """Fallback home: renders index.html template or redirects to Next.js."""
+    try:
+        tier1_items, pillar_groups = fetch_intelligence_for_brief()
+        market_tickers = fetch_market_snapshots_for_brief()
+        trending_repos, trending_papers, arxiv_count = fetch_code_and_paper_snapshots()
+        base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+        logo_url = os.getenv("LOGO_URL", f"{base_url}/assets/urivalent_logo.jfif")
+        now_dt = datetime.now(timezone.utc)
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context={
+                "request": request,
+                "logo_url": logo_url,
+                "formatted_date": now_dt.strftime("%A, %B %d, %Y"),
+                "greeting": get_daily_greeting(),
+                "market_tickers": market_tickers,
+                "total_arxiv_count": arxiv_count,
+                "tier1_items": tier1_items,
+                "pillar_groups": pillar_groups,
+                "trending_repos": trending_repos,
+                "trending_papers": trending_papers,
+                "current_year": now_dt.year
+            }
+        )
+    except Exception:
+        return JSONResponse({"service": "Urivalent API", "feed": "/api/feed", "health": "/health"})
 
 
 if __name__ == "__main__":

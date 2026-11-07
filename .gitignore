@@ -40,3 +40,4 @@ ENV/
 # Test artifacts
 preview_output.html
 .pytest_cache/
+

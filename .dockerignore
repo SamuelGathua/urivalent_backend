@@ -11,3 +11,4 @@ venv/
 *.db-journal
 test_*.py
 preview_output.html
+
