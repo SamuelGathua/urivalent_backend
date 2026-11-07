@@ -7,43 +7,81 @@ from typing import Optional, Dict, Any
 from fastapi import Request, HTTPException, status, Header, Cookie
 import jwt
 
+from pathlib import Path
+from dotenv import load_dotenv
+
 logger = logging.getLogger("urivalent.security")
 _ALGORITHM = "HS256"
 
 
+def reload_env_vars():
+    """Forces fresh loading of .env so updates take effect immediately without restart."""
+    env_file = Path(__file__).resolve().parent / ".env"
+    if env_file.exists():
+        load_dotenv(env_file, override=True)
+
+
 def get_secret_key() -> str:
     """Dynamically fetch JWT_SECRET_KEY to prevent load-order issues."""
+    reload_env_vars()
     key = os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY", "urivalent_super_secure_jwt_secret_key_2026_production")
-    # Ensure minimum 32 bytes for SHA256
     if len(key) < 32:
         key = key.ljust(32, "_")
     return key
 
 
 def get_admin_credentials():
-    """Retrieve configured admin username and password from environment."""
-    username = (
+    """Retrieve configured admin username and password dynamically from .env."""
+    reload_env_vars()
+    raw_user = (
         os.getenv("ADMIN_USERNAME")
         or os.getenv("ADMIN_USER")
         or "admin"
-    ).strip()
-    password = (
+    ).strip().strip("\"'")
+
+    raw_pass = (
         os.getenv("ADMIN_PASSWORD")
         or os.getenv("ADMIN_PASS")
         or os.getenv("ADMIN_PASSCODE")
-        or "urivalent2026"
-    ).strip()
-    return username, password
+        or "urivalent2026,univalent2026"
+    ).strip().strip("\"'")
+
+    return raw_user, raw_pass
 
 
 def verify_admin_credentials(username: str, password: str) -> bool:
-    """Constant-time comparison to prevent timing attacks."""
+    """
+    Constant-time comparison to prevent timing attacks.
+    Supports comma-separated passwords in .env, case-insensitive username,
+    and strips whitespace automatically.
+    """
     if not username or not password:
         return False
+
     expected_user, expected_pass = get_admin_credentials()
-    is_user_valid = secrets.compare_digest(username.strip(), expected_user)
-    is_pass_valid = secrets.compare_digest(password.strip(), expected_pass)
-    return is_user_valid and is_pass_valid
+
+    # Match username case-insensitively
+    u_match = secrets.compare_digest(username.strip().lower(), expected_user.lower())
+
+    # Build list of permitted passcodes (supports comma-separated values in .env)
+    allowed_passwords = [p.strip().strip("\"'") for p in expected_pass.split(",") if p.strip()]
+
+    # Always ensure both common spellings (urivalent2026 and univalent2026) are accepted
+    if "urivalent2026" in allowed_passwords and "univalent2026" not in allowed_passwords:
+        allowed_passwords.append("univalent2026")
+    elif "univalent2026" in allowed_passwords and "urivalent2026" not in allowed_passwords:
+        allowed_passwords.append("urivalent2026")
+
+    # Match passcode securely
+    p_match = any(secrets.compare_digest(password.strip(), p) for p in allowed_passwords)
+
+    if not (u_match and p_match):
+        logger.warning(
+            f"Admin credential mismatch: entered_user='{username.strip()}', "
+            f"user_ok={u_match}, pass_ok={p_match}"
+        )
+
+    return u_match and p_match
 
 
 def create_admin_token(username: str, expires_delta: Optional[timedelta] = None) -> str:
@@ -111,3 +149,4 @@ async def require_admin(
 
     # No valid authentication provided
     raise credentials_exception
+
