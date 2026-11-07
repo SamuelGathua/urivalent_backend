@@ -272,7 +272,7 @@ def send_daily_news_brief(batch_size: int = 100) -> Dict[str, Any]:
     }
 
 
-def send_test_email(target_email: str) -> Dict[str, Any]:
+async def send_test_email(target_email: str) -> Dict[str, Any]:
     """
     Test Email Dispatcher:
     Compiles live briefing using latest intelligence, snapshots, and trending preprints.

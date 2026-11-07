@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import inspect
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -176,7 +177,11 @@ async def api_test_email(
         raise HTTPException(status_code=400, detail="Missing required 'email' field in request.")
 
     logger.info(f"API admin requested test email for: {target_email}")
-    result = await send_test_email(str(target_email))
+    res_or_coro = send_test_email(str(target_email))
+    if inspect.iscoroutine(res_or_coro):
+        result = await res_or_coro
+    else:
+        result = res_or_coro
 
     if result.get("status") == "success":
         return {
