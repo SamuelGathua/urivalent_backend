@@ -2,12 +2,13 @@ import os
 import sys
 import logging
 import inspect
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, Form, Body
+from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, Form, Body, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -35,6 +36,11 @@ from scheduler_service import (
     get_scheduler_status,
     run_news_cycle,
     run_daily_morning_brief_job
+)
+from security import (
+    require_admin,
+    verify_admin_credentials,
+    create_admin_token
 )
 
 logger = logging.getLogger("urivalent.api")
@@ -92,6 +98,11 @@ class TestEmailPayload(BaseModel):
     admin_key: Optional[str] = None
 
 
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 # ------------------------------------------------------------------------------
 # 2. PURE REST API: JSON FEED FOR NEXT.JS
 # ------------------------------------------------------------------------------
@@ -138,40 +149,112 @@ def get_intelligence_feed():
 
 
 # ------------------------------------------------------------------------------
-# 3. REST ADMIN CONTROLLER ENDPOINTS
+# 3. REST ADMIN CONTROLLER ENDPOINTS (SECURED WITH JWT & REQUIRE_ADMIN)
 # ------------------------------------------------------------------------------
+
+@app.post("/admin/login")
+async def api_admin_login(
+    req: AdminLoginRequest,
+    request: Request
+):
+    """
+    Hardened Executive Admin Login:
+    Validates username and passcode with constant-time comparison.
+    Issues 8-hour signed JWT access token and secure session cookie.
+    """
+    client_ip = request.client.host if request and request.client else "unknown"
+    logger.info(f"Admin login attempt from {client_ip} for username: {req.username}")
+
+    if not verify_admin_credentials(req.username, req.password):
+        await asyncio.sleep(1)  # Mitigate brute-force & timing attacks
+        logger.warning(f"Failed admin authentication attempt from {client_ip} for username: {req.username}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid administrator username or passcode.",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    token = create_admin_token(req.username)
+    res = JSONResponse(
+        content={
+            "success": True,
+            "message": "Executive administrator authorization granted.",
+            "access_token": token,
+            "token_type": "bearer",
+            "username": req.username,
+            "expires_in": 28800
+        },
+        status_code=200
+    )
+    res.set_cookie(
+        key="admin_token",
+        value=token,
+        max_age=28800,
+        httponly=True,
+        samesite="lax",
+        secure=False
+    )
+    res.set_cookie(
+        key="admin_logged_in",
+        value="true",
+        max_age=28800,
+        httponly=False,
+        samesite="lax",
+        secure=False
+    )
+    logger.info(f"Admin authentication successful for {req.username} from {client_ip}")
+    return res
+
+
+@app.post("/admin/logout")
+async def api_admin_logout():
+    """Invalidates session cookies and signs out admin."""
+    res = JSONResponse(
+        content={"success": True, "message": "Admin session terminated successfully."},
+        status_code=200
+    )
+    res.delete_cookie(key="admin_token", path="/")
+    res.delete_cookie(key="admin_logged_in", path="/")
+    return res
+
+
+@app.get("/admin/verify")
+async def api_admin_verify(admin: dict = Depends(require_admin)):
+    """Verifies currently active administrator session."""
+    return {
+        "status": "authenticated",
+        "username": admin.get("username"),
+        "role": admin.get("role")
+    }
+
 
 @app.post("/admin/test-email")
 async def api_test_email(
     request: Request,
-    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+    admin: dict = Depends(require_admin)
 ):
     """
     Triggers a test email via Resend strictly to target_email without altering is_dispatched.
-    Accepts JSON body: {"email": "user@example.com", "admin_key": "..."}
-    or Form data: email=...
+    Accepts JSON body: {"email": "user@example.com"} or Form data: email=...
+    Protected by require_admin.
     """
     target_email = None
-    admin_key = x_admin_key
 
-    # Parse JSON or Form body
     try:
         content_type = request.headers.get("content-type", "")
         if "application/json" in content_type:
             body_data = await request.json()
             target_email = body_data.get("email")
-            admin_key = admin_key or body_data.get("admin_key")
         else:
             form_data = await request.form()
             target_email = form_data.get("email")
-            admin_key = admin_key or form_data.get("admin_key")
     except Exception as e:
         logger.warning(f"Error parsing request payload: {e}")
 
     if not target_email:
         raise HTTPException(status_code=400, detail="Missing required 'email' field in request.")
 
-    logger.info(f"API admin requested test email for: {target_email}")
+    logger.info(f"API admin ({admin.get('username')}) requested test email for: {target_email}")
     res_or_coro = send_test_email(str(target_email))
     if inspect.iscoroutine(res_or_coro):
         result = await res_or_coro
@@ -183,7 +266,8 @@ async def api_test_email(
             "status": "success",
             "message": f"Test briefing successfully dispatched to {target_email}!",
             "target_email": target_email,
-            "resend_live": result.get("resend_live", False)
+            "resend_live": result.get("resend_live", False),
+            "triggered_by": admin.get("username")
         }
     else:
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to dispatch test email."))
@@ -191,16 +275,17 @@ async def api_test_email(
 
 @app.post("/admin/force-news")
 def api_force_news(
-    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+    admin: dict = Depends(require_admin)
 ):
-    """Triggers on-demand scraping and synthesis into DB. Returns pure JSON."""
-    logger.info("REST API triggered force-news cycle...")
+    """Triggers on-demand scraping and synthesis into DB. Protected by require_admin."""
+    logger.info(f"REST API triggered force-news cycle by admin: {admin.get('username')}")
     result = run_news_cycle()
     if result.get("status") == "success":
         return {
             "status": "success",
             "message": f"Ingestion cycle completed successfully! Ingested {result.get('raw_count', 0)} raw items and synthesized {result.get('synthesized_count', 0)} entries.",
-            "data": result
+            "data": result,
+            "triggered_by": admin.get("username")
         }
     else:
         raise HTTPException(status_code=500, detail=result.get("error", "Ingestion cycle failed."))
@@ -209,16 +294,17 @@ def api_force_news(
 @app.post("/admin/send-morning-brief")
 @app.post("/send-daily-news-email")
 def api_send_morning_brief(
-    x_admin_key: Optional[str] = Header(None, alias="X-Admin-Key")
+    admin: dict = Depends(require_admin)
 ):
-    """Triggers on-demand full scraping, synthesis, and subscriber email dispatch. Returns pure JSON."""
-    logger.info("REST API triggered morning brief delivery cycle...")
+    """Triggers on-demand morning briefing batch dispatch. Protected by require_admin."""
+    logger.info(f"REST API triggered morning brief delivery cycle by admin: {admin.get('username')}")
     result = run_daily_morning_brief_job()
     if result.get("status") == "success":
         return {
             "status": "success",
             "message": "Morning briefing cycle executed and emails dispatched successfully!",
-            "data": result
+            "data": result,
+            "triggered_by": admin.get("username")
         }
     else:
         raise HTTPException(status_code=500, detail=result.get("error", "Morning brief execution failed."))
