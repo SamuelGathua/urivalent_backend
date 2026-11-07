@@ -72,11 +72,11 @@ app = FastAPI(
 )
 
 # ------------------------------------------------------------------------------
-# 1. CORS CONFIGURATION (NEXT.JS INTEGRATION)
+# 1. CORS CONFIGURATION (PUBLIC INTELLIGENCE FEED + ADMIN CONSOLE)
 # ------------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
