@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import logging
 import inspect
 import asyncio
@@ -188,6 +189,11 @@ def get_intelligence_feed():
 # 3. REST ADMIN CONTROLLER ENDPOINTS (SECURED WITH JWT & REQUIRE_ADMIN)
 # ------------------------------------------------------------------------------
 
+# Rate limiting / lockout tracker for admin login (3 trials maximum)
+MAX_LOGIN_TRIALS = 3
+LOCKOUT_SECONDS = 900  # 15 minutes lockout
+LOGIN_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
+
 @app.post("/admin/login")
 async def api_admin_login(
     req: AdminLoginRequest,
@@ -195,20 +201,54 @@ async def api_admin_login(
 ):
     """
     Hardened Executive Admin Login:
+    Enforces maximum 3 login trials per IP with a 15-minute lockout.
     Validates username and passcode with constant-time comparison.
     Issues 8-hour signed JWT access token and secure session cookie.
     """
     client_ip = request.client.host if request and request.client else "unknown"
+    now = time.time()
+
+    # 1. Check if IP is currently locked out
+    ip_record = LOGIN_ATTEMPTS.get(client_ip)
+    if ip_record and ip_record.get("lockout_until", 0) > now:
+        remaining_wait = int(ip_record["lockout_until"] - now)
+        minutes = remaining_wait // 60
+        seconds = remaining_wait % 60
+        logger.warning(f"Blocked login attempt from locked-out IP {client_ip} ({remaining_wait}s remaining)")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Maximum login trials exceeded (3/3). Terminal locked for security. Please try again in {minutes}m {seconds:02d}s."
+        )
+
     logger.info(f"Admin login attempt from {client_ip} for username: {req.username}")
 
+    # 2. Verify credentials
     if not verify_admin_credentials(req.username, req.password):
-        await asyncio.sleep(1)  # Mitigate brute-force & timing attacks
-        logger.warning(f"Failed admin authentication attempt from {client_ip} for username: {req.username}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid administrator username or passcode.",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
+        await asyncio.sleep(1)  # Mitigate timing attacks
+        record = LOGIN_ATTEMPTS.get(client_ip, {"attempts": 0, "lockout_until": 0})
+        record["attempts"] += 1
+
+        if record["attempts"] >= MAX_LOGIN_TRIALS:
+            record["lockout_until"] = now + LOCKOUT_SECONDS
+            LOGIN_ATTEMPTS[client_ip] = record
+            logger.warning(f"IP {client_ip} reached maximum login trials ({MAX_LOGIN_TRIALS}) — locked out for 15 minutes.")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Maximum login trials exceeded (3/3). Terminal locked for 15 minutes for security."
+            )
+        else:
+            LOGIN_ATTEMPTS[client_ip] = record
+            remaining_trials = MAX_LOGIN_TRIALS - record["attempts"]
+            logger.warning(f"Failed admin authentication attempt from {client_ip} for username: {req.username}. {remaining_trials} trial(s) remaining.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Invalid administrator username or password. {remaining_trials} trial{'s' if remaining_trials != 1 else ''} remaining.",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+
+    # 3. Successful authentication: Clear failed trials
+    if client_ip in LOGIN_ATTEMPTS:
+        LOGIN_ATTEMPTS.pop(client_ip, None)
 
     token = create_admin_token(req.username)
     res = JSONResponse(
