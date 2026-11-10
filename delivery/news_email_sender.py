@@ -9,6 +9,7 @@ import jwt
 from jinja2 import Environment, FileSystemLoader
 
 from database.db_client import db_client
+from ingestion.fetch_market_pulse import TRACKED_STOCKS_CONFIG
 
 logger = logging.getLogger("urivalent.delivery.email")
 if not logger.handlers:
@@ -63,20 +64,21 @@ def get_daily_greeting() -> str:
 
 def fetch_intelligence_for_brief() -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
     """
-    Query ai_intelligence_items from the database (last 36 hours or latest batch).
+    Query ai_intelligence_items from the database (last 48 hours or latest batch).
     Separates items into Tier-1 breakthroughs (score >= 8) and Sector Pillars (score < 8).
+    Ensures recency is strictly preserved so fresh breaking items take precedence over old stories.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=36)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
     query = """
     SELECT * FROM ai_intelligence_items
-    WHERE published_at >= ? OR is_dispatched = 0
-    ORDER BY signal_score DESC, id DESC
+    WHERE published_at >= ?
+    ORDER BY signal_score DESC, published_at DESC, id DESC
     LIMIT 40;
     """
     rows = db_client.fetchall(query, (cutoff,))
-    if not rows:
-        # Fallback to latest available items
-        rows = db_client.fetchall("SELECT * FROM ai_intelligence_items ORDER BY signal_score DESC, id DESC LIMIT 25;")
+    if not rows or len(rows) < 5:
+        # Fallback to the latest available items ordered by recency
+        rows = db_client.fetchall("SELECT * FROM ai_intelligence_items ORDER BY published_at DESC, signal_score DESC, id DESC LIMIT 40;")
 
     tier1_items: List[Dict[str, Any]] = []
     pillar_groups: Dict[str, List[Dict[str, Any]]] = {p: [] for p in CANONICAL_PILLARS}
@@ -100,63 +102,146 @@ def fetch_intelligence_for_brief() -> Tuple[List[Dict[str, Any]], Dict[str, List
                 pillar_groups[pillar] = []
             pillar_groups[pillar].append(r)
 
+    # If no items scored >= 8, elevate the top 2 items so Priority Intelligence is never empty
+    if not tier1_items and rows:
+        elevated = rows[:2]
+        for it in elevated:
+            pillar = it.get("pillar_category", "[MODELS & RESEARCH]")
+            if pillar in pillar_groups and it in pillar_groups[pillar]:
+                pillar_groups[pillar].remove(it)
+            tier1_items.append(it)
+
     return tier1_items, pillar_groups
 
 
-def fetch_market_snapshots_for_brief() -> List[Dict[str, Any]]:
-    """Fetch latest compute market snapshots for the top ticker bar."""
+def build_stock_record(cfg: Dict[str, Any], snap: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Helper to assemble a rich market stock record with TradingView and Yahoo links."""
+    ticker = cfg["ticker"]
+    exchange = cfg.get("exchange", "NASDAQ")
+    is_private = cfg.get("is_private", False)
+    name = cfg.get("name", ticker)
+    category = cfg.get("category", "Compute & Capital")
+
+    if is_private:
+        return {
+            "symbol": ticker,
+            "ticker": ticker,
+            "name": name,
+            "category": category,
+            "last": None,
+            "close_price": 0.0,
+            "change": None,
+            "daily_change_pct": 0.0,
+            "change_pct": None,
+            "is_private": True,
+            "private_note": cfg.get("private_note", "Private"),
+            "tradingview_url": cfg.get("tradingview_url"),
+            "yahoo_url": cfg.get("target_url") or f"https://finance.yahoo.com/lookup?s={name.replace(' ', '+')}"
+        }
+
+    close_price = round(float(snap["close_price"]), 2) if snap and snap.get("close_price") is not None else 0.0
+    change = round(float(snap["change"]), 2) if snap and snap.get("change") is not None else 0.0
+    pct = round(float(snap["daily_change_pct"]), 2) if snap and snap.get("daily_change_pct") is not None else 0.0
+
+    tv_symbol = f"{exchange}%3A{ticker}" if exchange != "OTC" else f"OTC%3A{ticker}"
+    tv_url = cfg.get("tradingview_url") or f"https://www.tradingview.com/chart/?symbol={tv_symbol}"
+    yahoo_url = cfg.get("target_url") or f"https://finance.yahoo.com/quote/{ticker}/"
+
+    return {
+        "symbol": ticker,
+        "ticker": ticker,
+        "name": name,
+        "category": category,
+        "last": close_price,
+        "close_price": close_price,
+        "change": change,
+        "daily_change_pct": pct,
+        "change_pct": pct,
+        "five_day_trend_pct": round(float(snap.get("five_day_trend_pct", 0.0)), 2) if snap else 0.0,
+        "volume_anomaly": snap.get("volume_anomaly", 0) if snap else 0,
+        "is_private": False,
+        "private_note": None,
+        "tradingview_url": tv_url,
+        "yahoo_url": yahoo_url
+    }
+
+
+def fetch_market_categories_for_brief() -> Dict[str, List[Dict[str, Any]]]:
+    """Fetch all tracked stocks organized by their respective canonical categories."""
     query = """
-    SELECT ticker, close_price, daily_change_pct, five_day_trend_pct, volume_anomaly
+    SELECT ticker, company_name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume_anomaly, date
     FROM compute_market_snapshots
-    ORDER BY id DESC
-    LIMIT 10;
+    ORDER BY date DESC, id DESC;
     """
     rows = db_client.fetchall(query)
-    # Ensure distinct by ticker
-    seen = set()
-    distinct_tickers = []
+    snap_map: Dict[str, Dict[str, Any]] = {}
     for r in rows:
-        if r["ticker"] not in seen:
-            seen.add(r["ticker"])
-            distinct_tickers.append(r)
-    return distinct_tickers[:6]
+        t = r.get("ticker")
+        if t and t not in snap_map:
+            snap_map[t] = r
+
+    categories: Dict[str, List[Dict[str, Any]]] = {}
+    for cfg in TRACKED_STOCKS_CONFIG:
+        cat = cfg["category"]
+        if cat not in categories:
+            categories[cat] = []
+        rec = build_stock_record(cfg, snap_map.get(cfg["ticker"]))
+        categories[cat].append(rec)
+
+    return categories
+
+
+def fetch_market_snapshots_for_brief() -> List[Dict[str, Any]]:
+    """Fetch all tracked stock records flattened with full metrics and links."""
+    categories = fetch_market_categories_for_brief()
+    flat = []
+    for cat_stocks in categories.values():
+        flat.extend(cat_stocks)
+    return flat
 
 
 def fetch_code_and_paper_snapshots() -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], int]:
-    """Fetch trending GitHub repositories and top papers from snapshots."""
+    """Fetch trending GitHub repositories and top papers from snapshots ordered by date and rank."""
     # GitHub snapshots
-    gh_rows = db_client.fetchall("SELECT * FROM github_trending_snapshots ORDER BY id DESC LIMIT 5;")
+    gh_rows = db_client.fetchall("SELECT * FROM github_trending_snapshots ORDER BY date DESC, id DESC;")
     seen_repos = set()
     repos = []
     for r in gh_rows:
-        if r["repo_name"] not in seen_repos:
-            seen_repos.add(r["repo_name"])
+        name = r.get("repo_name")
+        if name and name not in seen_repos:
+            seen_repos.add(name)
             repos.append(r)
+            if len(repos) >= 4:
+                break
 
-    # Paper snapshots
-    paper_rows = db_client.fetchall("SELECT * FROM research_paper_snapshots ORDER BY upvotes DESC, id DESC LIMIT 5;")
+    # Paper snapshots: prioritize newest date, then upvotes
+    paper_rows = db_client.fetchall("SELECT * FROM research_paper_snapshots ORDER BY date DESC, upvotes DESC, id DESC;")
     seen_papers = set()
     papers = []
     for p in paper_rows:
-        if p["paper_id"] not in seen_papers:
-            seen_papers.add(p["paper_id"])
+        pid = p.get("paper_id")
+        if pid and pid not in seen_papers:
+            seen_papers.add(pid)
             papers.append(p)
+            if len(papers) >= 4:
+                break
 
     # Estimate total 24h arXiv count from today's snapshots or fallback
     arxiv_count = len([p for p in paper_rows if p.get("source") == "arXiv"])
     if arxiv_count == 0:
         arxiv_count = 778  # verified daily average
 
-    return repos[:4], papers[:4], arxiv_count
+    return repos, papers, arxiv_count
 
 
 def compile_brief_html(
     subscriber_email: str = "preview@urivalent.com",
+    username: str = "Analyst",
     preview_mode: bool = False
 ) -> str:
     """
     Compiles templates/ai_brief.html with live database intelligence, market snapshots,
-    rotating executive greetings, and subscriber-specific signed JWT unsubscribe links.
+    rotating executive greetings, personalized subscriber greeting, and signed JWT unsubscribe links.
     """
     templates_dir = Path(__file__).resolve().parent.parent / "templates"
     env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
@@ -167,7 +252,7 @@ def compile_brief_html(
     trending_repos, trending_papers, arxiv_count = fetch_code_and_paper_snapshots()
 
     base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
-    logo_url = os.getenv("LOGO_URL", f"{base_url}/assets/urivalent_logo.jfif")
+    logo_url = os.getenv("LOGO_URL", f"{base_url}/assets/urivalent_logo.png")
     if not logo_url.startswith("http"):
         logo_url = f"{base_url}{logo_url}"
 
@@ -181,6 +266,8 @@ def compile_brief_html(
         "logo_url": logo_url,
         "formatted_date": formatted_date,
         "greeting": get_daily_greeting(),
+        "username": username or "Analyst",
+        "subscriber_email": subscriber_email,
         "market_tickers": market_tickers,
         "total_arxiv_count": arxiv_count,
         "tier1_items": tier1_items,
@@ -199,6 +286,7 @@ def send_daily_news_brief(batch_size: int = 100) -> Dict[str, Any]:
     """
     Compiles and dispatches the daily Urivalent morning intelligence briefing
     to all active verified subscribers via Resend in batches of 100.
+    Includes personalized subscriber headings and high-priority / importance headers.
     Marks intelligence items as is_dispatched = 1.
     """
     # 1. Fetch active subscribers
@@ -212,7 +300,8 @@ def send_daily_news_brief(batch_size: int = 100) -> Dict[str, Any]:
         return {"status": "no_subscribers", "dispatched_count": 0}
 
     resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
-    sender_email = os.getenv("SENDER_EMAIL", "briefing@urivalent.com")
+    raw_sender = os.getenv("SENDER_EMAIL", "notifications@urivalent.tech").strip()
+    sender_email = f"Urivalent <{raw_sender}>" if "<" not in raw_sender else raw_sender
     base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 
     import resend
@@ -230,7 +319,8 @@ def send_daily_news_brief(batch_size: int = 100) -> Dict[str, Any]:
 
         for sub in chunk:
             email = sub["email"]
-            html_content = compile_brief_html(subscriber_email=email)
+            username = sub.get("username") or email.split("@")[0] or "Analyst"
+            html_content = compile_brief_html(subscriber_email=email, username=username)
             unsub_token = generate_unsubscribe_token(email)
             unsub_url = f"{base_url}/auth/unsubscribe?token={unsub_token}"
 
@@ -243,7 +333,10 @@ def send_daily_news_brief(batch_size: int = 100) -> Dict[str, Any]:
                     "List-Unsubscribe": f"<{unsub_url}>",
                     "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
                     "X-Priority": "1",
-                    "X-Entity-Ref-ID": f"urivalent-{now_dt.strftime('%Y%m%d')}"
+                    "X-MSMail-Priority": "High",
+                    "Importance": "high",
+                    "Priority": "Urgent",
+                    "X-Entity-Ref-ID": f"urivalent-{now_dt.strftime('%Y%m%d%H%M%S')}"
                 }
             }
             batch_emails.append(email_payload)
@@ -251,18 +344,29 @@ def send_daily_news_brief(batch_size: int = 100) -> Dict[str, Any]:
         # Dispatch via Resend if API key configured
         if resend_api_key:
             try:
-                logger.info(f"Dispatching batch of {len(batch_emails)} emails via Resend Batch API...")
+                logger.info(f"Dispatching batch of {len(batch_emails)} emails via Resend Batch API from {sender_email}...")
                 resend.Batch.send(batch_emails)
                 total_sent += len(batch_emails)
             except Exception as e:
-                logger.error(f"Resend batch send error: {e}")
+                logger.warning(f"Resend batch send encountered an issue ({e}). Falling back to individual subscriber dispatch...")
+                for email_payload in batch_emails:
+                    recipient = email_payload["to"][0]
+                    try:
+                        resend.Emails.send(email_payload)
+                        total_sent += 1
+                        logger.info(f"Successfully delivered briefing to: {recipient}")
+                    except Exception as ind_err:
+                        logger.error(f"Failed to dispatch to {recipient}: {ind_err}")
         else:
             logger.info(f"Simulated dispatch: Prepared {len(batch_emails)} emails (RESEND_API_KEY not configured).")
             total_sent += len(batch_emails)
 
-    # Mark items as dispatched
-    db_client.execute("UPDATE ai_intelligence_items SET is_dispatched = 1 WHERE is_dispatched = 0;")
-    logger.info(f"Marked intelligence items as dispatched. Total subscribers processed: {total_sent}")
+    # Mark items as dispatched only if at least one delivery succeeded
+    if total_sent > 0:
+        db_client.execute("UPDATE ai_intelligence_items SET is_dispatched = 1 WHERE is_dispatched = 0;")
+        logger.info(f"Marked intelligence items as dispatched. Total delivered: {total_sent}")
+    else:
+        logger.warning("Zero emails were delivered. Skipping is_dispatched database update.")
 
     return {
         "status": "success",
@@ -276,14 +380,20 @@ async def send_test_email(target_email: str) -> Dict[str, Any]:
     """
     Test Email Dispatcher:
     Compiles live briefing using latest intelligence, snapshots, and trending preprints.
+    Includes personalized username callout and high importance headers.
     Dispatches exclusively to the provided target_email via Resend.
     CRITICAL: Does NOT touch or update is_dispatched in the database.
     """
     logger.info(f"Initiating test email dispatch to: {target_email}...")
 
-    html_content = compile_brief_html(subscriber_email=target_email, preview_mode=False)
+    # Look up personalized username if registered
+    user_row = db_client.fetchone("SELECT username FROM users WHERE email = ?;", (target_email,))
+    username = user_row.get("username") if user_row and user_row.get("username") else target_email.split("@")[0]
+
+    html_content = compile_brief_html(subscriber_email=target_email, username=username, preview_mode=False)
     resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
-    sender_email = os.getenv("SENDER_EMAIL", "onboarding@resend.dev")
+    raw_sender = os.getenv("SENDER_EMAIL", "notifications@urivalent.tech").strip()
+    sender_email = f"Urivalent <{raw_sender}>" if "<" not in raw_sender else raw_sender
     base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
     now_dt = datetime.now(timezone.utc)
     subject = f"[TEST BRIEF] Urivalent Intelligence Briefing — {now_dt.strftime('%b %d, %Y')}"
@@ -300,6 +410,9 @@ async def send_test_email(target_email: str) -> Dict[str, Any]:
             "List-Unsubscribe": f"<{unsub_url}>",
             "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
             "X-Priority": "1",
+            "X-MSMail-Priority": "High",
+            "Importance": "high",
+            "Priority": "Urgent",
             "X-Entity-Ref-ID": f"urivalent-test-{now_dt.strftime('%Y%m%d%H%M%S')}"
         }
     }
@@ -308,7 +421,7 @@ async def send_test_email(target_email: str) -> Dict[str, Any]:
         import resend
         resend.api_key = resend_api_key
         try:
-            logger.info(f"Sending test email to {target_email} via Resend API...")
+            logger.info(f"Sending test email to {target_email} from {sender_email} via Resend API...")
             resp = resend.Emails.send(email_payload)
             logger.info(f"Test email sent successfully! Response: {resp}")
             return {

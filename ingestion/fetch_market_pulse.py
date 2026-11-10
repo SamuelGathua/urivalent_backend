@@ -16,19 +16,53 @@ logger = logging.getLogger("urivalent.ingestion.market")
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-# 10 Core AI Compute & Macro Tickers
-CORE_TICKERS = [
-    "NVDA",   # NVIDIA - GPUs / AI Accelerators
-    "TSM",    # Taiwan Semiconductor - Foundry / Lithography
-    "ASML",   # ASML - EUV Lithography
-    "ARM",    # ARM Holdings - Architecture & IP
-    "AVGO",   # Broadcom - Custom Silicon & Networking
-    "MSFT",   # Microsoft - Hyperscaler & Azure AI
-    "GOOGL",  # Alphabet - Hyperscaler & TPU Compute
-    "META",   # Meta Platforms - Open Weights & Llama Compute
-    "CEG",    # Constellation Energy - Nuclear Power for Data Centers
-    "CCJ"     # Cameco - Uranium / Nuclear Fuel
+# Categorized Sovereign & Compute Market Watchlist
+TRACKED_STOCKS_CONFIG = [
+    # 1. Silicon & Nanotech
+    {"category": "Silicon & Nanotech", "name": "NVIDIA", "ticker": "NVDA", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Silicon & Nanotech", "name": "ASML Holding", "ticker": "ASML", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Silicon & Nanotech", "name": "Taiwan Semiconductor Manufacturing Co.", "ticker": "TSM", "exchange": "NYSE", "is_private": False},
+    {"category": "Silicon & Nanotech", "name": "Arm Holdings", "ticker": "ARM", "exchange": "NASDAQ", "is_private": False},
+
+    # 2. Energy & Infra (including Space & Power)
+    {"category": "Energy & Infra (including Space & Power)", "name": "Constellation Energy", "ticker": "CEG", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Energy & Infra (including Space & Power)", "name": "Vertiv", "ticker": "VRT", "exchange": "NYSE", "is_private": False},
+    {"category": "Energy & Infra (including Space & Power)", "name": "SpaceX", "ticker": "SPCX", "exchange": "NASDAQ", "is_private": False, "tradingview_url": "https://www.tradingview.com/chart/?symbol=NASDAQ%3ASPCX"},
+    {"category": "Energy & Infra (including Space & Power)", "name": "NextEra Energy", "ticker": "NEE", "exchange": "NYSE", "is_private": False},
+
+    # 3. Models & Research (including Autonomous AI)
+    {"category": "Models & Research (including Autonomous AI)", "name": "Alphabet", "ticker": "GOOGL", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Models & Research (including Autonomous AI)", "name": "Meta Platforms", "ticker": "META", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Models & Research (including Autonomous AI)", "name": "Microsoft", "ticker": "MSFT", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Models & Research (including Autonomous AI)", "name": "Tesla", "ticker": "TSLA", "exchange": "NASDAQ", "is_private": False},
+
+    # 4. Bio-Intelligence & Medicine
+    {"category": "Bio-Intelligence & Medicine", "name": "Recursion Pharmaceuticals", "ticker": "RXRX", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Bio-Intelligence & Medicine", "name": "Tempus AI", "ticker": "TEM", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Bio-Intelligence & Medicine", "name": "Schrödinger", "ticker": "SDGR", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Bio-Intelligence & Medicine", "name": "Eli Lilly and Company", "ticker": "LLY", "exchange": "NYSE", "is_private": False},
+
+    # 5. Agents & Tooling (including Embodied Robotics)
+    {"category": "Agents & Tooling (including Embodied Robotics)", "name": "ServiceNow", "ticker": "NOW", "exchange": "NYSE", "is_private": False},
+    {"category": "Agents & Tooling (including Embodied Robotics)", "name": "Cloudflare", "ticker": "NET", "exchange": "NYSE", "is_private": False},
+    {"category": "Agents & Tooling (including Embodied Robotics)", "name": "Figure AI", "ticker": "FIGURE", "exchange": "PRIVATE", "is_private": True, "private_note": "$2.6B+ (Private)", "target_url": "https://www.figure.ai"},
+    {"category": "Agents & Tooling (including Embodied Robotics)", "name": "UiPath", "ticker": "PATH", "exchange": "NYSE", "is_private": False},
+
+    # 6. Capital & Markets
+    {"category": "Capital & Markets", "name": "SoftBank Group", "ticker": "SFTBY", "exchange": "OTC", "is_private": False},
+    {"category": "Capital & Markets", "name": "Blackstone", "ticker": "BX", "exchange": "NYSE", "is_private": False},
+    {"category": "Capital & Markets", "name": "Coinbase", "ticker": "COIN", "exchange": "NASDAQ", "is_private": False},
+
+    # 7. Policy & Sovereignty (Defense & State Tech)
+    {"category": "Policy & Sovereignty (Defense & State Tech)", "name": "Palantir", "ticker": "PLTR", "exchange": "NASDAQ", "is_private": False},
+    {"category": "Policy & Sovereignty (Defense & State Tech)", "name": "Booz Allen Hamilton", "ticker": "BAH", "exchange": "NYSE", "is_private": False},
+    {"category": "Policy & Sovereignty (Defense & State Tech)", "name": "Anduril Industries", "ticker": "ANDURIL", "exchange": "PRIVATE", "is_private": True, "private_note": "$14B+ (Private)", "target_url": "https://www.anduril.com"},
+    {"category": "Policy & Sovereignty (Defense & State Tech)", "name": "Lockheed Martin", "ticker": "LMT", "exchange": "NYSE", "is_private": False}
 ]
+
+# Tickers that are actively queried via market data APIs
+CORE_TICKERS = [s["ticker"] for s in TRACKED_STOCKS_CONFIG if not s.get("is_private")]
+TICKER_TO_CONFIG = {s["ticker"]: s for s in TRACKED_STOCKS_CONFIG}
 
 # SEC EDGAR Target Keywords for CapEx and Hardware Alerts
 SEC_KEYWORDS = [
@@ -48,19 +82,27 @@ TICKER_TO_CIK = {
     "TSM": "0001046179",
     "ASML": "0000937966",
     "ARM": "0001973239",
-    "AVGO": "0001730168",
     "MSFT": "0000789019",
     "GOOGL": "0001652044",
     "META": "0001326801",
     "CEG": "0001868275",
-    "CCJ": "0001009840"
+    "VRT": "0001674101",
+    "NEE": "0000753308",
+    "TSLA": "0001318605",
+    "PLTR": "0001321655",
+    "LMT": "0000936468",
+    "LLY": "0000059478",
+    "NOW": "0001373715",
+    "NET": "0001477333",
+    "COIN": "0001679788",
+    "BX": "0001393818"
 }
 
 
 def fetch_public_ai_basket(tickers: Optional[List[str]] = None, persist_to_db: bool = True) -> List[Dict[str, Any]]:
     """
-    Part A: Fetches 5-day price/volume history for AI basket tickers using yfinance.
-    Calculates: close_price, daily_change_pct, five_day_trend_pct, volume, volume_anomaly.
+    Part A: Fetches 5-day price/volume history for categorized AI & compute basket tickers using yfinance.
+    Calculates: close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly.
     Saves snapshots to compute_market_snapshots.
     Emits RawIntelItem alerts (badge: 'MARKET') if daily_change_pct > 4.0% or volume_anomaly == 1.
     """
@@ -72,12 +114,33 @@ def fetch_public_ai_basket(tickers: Optional[List[str]] = None, persist_to_db: b
 
     logger.info(f"Fetching 5-day market data for {len(tickers)} core tickers...")
 
+    # Batch download to optimize latency and reliability
+    try:
+        batch_data = yf.download(tickers, period="5d", interval="1d", group_by="ticker", progress=False)
+    except Exception as batch_err:
+        logger.warning(f"Batch yfinance download failed: {batch_err}. Falling back to individual queries.")
+        batch_data = None
+
     for ticker in tickers:
         try:
-            t = yf.Ticker(ticker)
-            hist = t.history(period="5d", interval="1d")
+            cfg = TICKER_TO_CONFIG.get(ticker, {})
+            name = cfg.get("name", ticker)
+            category = cfg.get("category", "Compute & Capital")
 
-            if hist.empty or len(hist) < 2:
+            hist = None
+            if batch_data is not None:
+                try:
+                    df = batch_data[ticker].dropna()
+                    if len(df) >= 2:
+                        hist = df
+                except Exception:
+                    pass
+
+            if hist is None:
+                t = yf.Ticker(ticker)
+                hist = t.history(period="5d", interval="1d")
+
+            if hist is None or hist.empty or len(hist) < 2:
                 logger.warning(f"Insufficient history data returned for ticker {ticker}")
                 continue
 
@@ -88,7 +151,8 @@ def fetch_public_ai_basket(tickers: Optional[List[str]] = None, persist_to_db: b
 
             close_price = round(float(latest_row["Close"]), 2)
             prev_close = float(prev_row["Close"])
-            daily_change_pct = round(((close_price - prev_close) / prev_close) * 100, 2) if prev_close else 0.0
+            change = round(close_price - prev_close, 2)
+            daily_change_pct = round((change / prev_close) * 100, 2) if prev_close else 0.0
 
             first_close = float(first_row["Close"])
             five_day_trend_pct = round(((close_price - first_close) / first_close) * 100, 2) if first_close else 0.0
@@ -103,12 +167,12 @@ def fetch_public_ai_basket(tickers: Optional[List[str]] = None, persist_to_db: b
             if persist_to_db:
                 query = """
                 INSERT OR REPLACE INTO compute_market_snapshots
-                (date, ticker, close_price, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
-                VALUES (?, ?, ?, ?, ?, ?, ?);
+                (date, ticker, company_name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """
                 db_client.execute(
                     query,
-                    (today_str, ticker, close_price, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
+                    (today_str, ticker, name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
                 )
 
             # High-priority alert condition: abs(daily_change_pct) >= 4.0 or volume anomaly
@@ -122,10 +186,10 @@ def fetch_public_ai_basket(tickers: Optional[List[str]] = None, persist_to_db: b
                     vol_ratio = round(volume / avg_volume_5d, 1) if avg_volume_5d > 0 else 0
                     reasons.append(f"volume spike ({vol_ratio}x 5d avg)")
 
-                headline = f"COMPUTE MARKET ALERT: {ticker} {direction_str} {abs(daily_change_pct):.2f}% to ${close_price:.2f} ({', '.join(reasons)})"
+                headline = f"COMPUTE MARKET ALERT: {ticker} ({name}) {direction_str} {abs(daily_change_pct):.2f}% to ${close_price:.2f} ({', '.join(reasons)})"
                 summary = (
-                    f"{ticker} recorded a closing price of ${close_price:.2f} with a 24-hour move of {daily_change_pct:+.2f}% "
-                    f"and a 5-day trend of {five_day_trend_pct:+.2f}%. Trading volume hit {volume:,} shares "
+                    f"{name} ({ticker}) recorded a closing price of ${close_price:.2f} with a 24-hour move of {daily_change_pct:+.2f}% "
+                    f"(${change:+.2f}) and a 5-day trend of {five_day_trend_pct:+.2f}%. Trading volume hit {volume:,} shares "
                     f"({'volume anomaly detected' if volume_anomaly else 'normal volume'})."
                 )
 
@@ -142,6 +206,23 @@ def fetch_public_ai_basket(tickers: Optional[List[str]] = None, persist_to_db: b
 
         except Exception as e:
             logger.error(f"Error processing ticker {ticker} in yfinance: {e}")
+
+    # Also persist private stock entries so today's snapshot table covers all tracked entities
+    if persist_to_db:
+        private_query = """
+        INSERT OR REPLACE INTO compute_market_snapshots
+        (date, ticker, company_name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        for item in TRACKED_STOCKS_CONFIG:
+            if item.get("is_private"):
+                try:
+                    db_client.execute(
+                        private_query,
+                        (today_str, item["ticker"], item["name"], item["category"], 0.0, 0.0, 0.0, 0.0, 0, 0)
+                    )
+                except Exception as p_err:
+                    logger.debug(f"Private snapshot insert notice: {p_err}")
 
     logger.info(f"Completed market basket watch. Stored snapshots, emitted {len(intel_alerts)} high-priority market alerts.")
     return intel_alerts

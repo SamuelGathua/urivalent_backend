@@ -16,7 +16,6 @@
     .ticker-pill { display: inline-block; padding: 4px 8px; margin: 2px 4px; border-radius: 4px; background-color: #FFFFFF; font-size: 11px; font-weight: bold; border: 1px solid #9DC88D; color: #164A41; }
     .pill-up { color: #4D774E; }
     .pill-down { color: #164A41; }
-    .ticker-arxiv { display: inline-block; padding: 4px 10px; border-radius: 4px; background-color: #FFFFFF; border: 1px solid #F1B24A; color: #F1B24A; font-size: 11px; font-weight: bold; }
     
     /* Cards */
     .card-tier1 { background-color: #FFFFFF; border: 1px solid #F1B24A; border-top: 4px solid #F1B24A; box-shadow: 0 4px 12px rgba(22, 74, 65, 0.05); border-radius: 6px; padding: 22px; margin-bottom: 24px; }
@@ -40,13 +39,19 @@
       
       <!-- HEADER (DEEP FOREST & GOLD) -->
       <tr>
-        <td style="padding: 32px 28px; background-color: #164A41; border-bottom: 4px solid #F1B24A; text-align: center;">
-          <img src="{{ logo_url }}" alt="Urivalent Logo" width="220" style="display: block; max-width: 220px; height: auto; margin: 0 auto 16px auto;" />
+        <td style="padding: 28px 28px 20px 28px; background-color: #164A41; text-align: center;">
+          <img src="{{ logo_url }}" alt="Urivalent Logo" width="220" style="display: block; max-width: 220px; height: auto; margin: 0 auto 14px auto;" />
           <div style="font-size: 11px; color: #9DC88D; text-transform: uppercase; letter-spacing: 2px; font-weight: bold;">
             {{ formatted_date }} &nbsp;|&nbsp; INTELLIGENCE BRIEFING
           </div>
-          <div style="margin-top: 18px; font-size: 14px; font-style: italic; color: #FFFFFF; font-weight: 300;">
-            "{{ greeting }}"
+        </td>
+      </tr>
+
+      <!-- UNIFIED EXECUTIVE INTRO BANNER -->
+      <tr>
+        <td style="padding: 16px 28px; background-color: #0F352E; border-top: 3px solid #F1B24A; border-bottom: 1px solid rgba(157, 200, 141, 0.3); text-align: left;">
+          <div style="font-size: 13.5px; color: #E8F5E9; line-height: 1.55;">
+            Good morning, <strong style="color: #F1B24A; font-weight: 700;">{{ username or 'Analyst' }}</strong>. Frontier model preprints, data center power agreements, and high-velocity open-source tooling from the past 24 hours.
           </div>
         </td>
       </tr>
@@ -66,9 +71,6 @@
               </span>
             </span>
             {% endfor %}
-            <span class="ticker-arxiv">
-              TOTAL NEW ARXIV PAPERS: {{ total_arxiv_count }}
-            </span>
           </div>
         </td>
       </tr>
@@ -83,7 +85,6 @@
               <td>
                 <div class="section-header" style="color: #F1B24A; border-bottom: 1px solid #F1B24A;">
                   [ PRIORITY INTELLIGENCE ]
-                  <span style="font-size: 10px; color: #4D774E; letter-spacing: 0px; float: right; margin-top: 2px;">SIGNAL &ge; 8/10</span>
                 </div>
               </td>
             </tr>
@@ -100,9 +101,6 @@
                             {{ item.pillar_category }}
                           </span>
                           <span class="chip-entity">{{ item.primary_entity }}</span>
-                        </td>
-                        <td align="right">
-                          <span class="chip-score">SIGNAL: {{ item.signal_score }}/10</span>
                         </td>
                       </tr>
                     </table>
@@ -181,9 +179,6 @@
                       <tr>
                         <td align="left">
                           <span class="chip-entity" style="font-size: 10px;">{{ item.primary_entity }}</span>
-                        </td>
-                        <td align="right">
-                          <span style="font-size: 11px; color: #4D774E; font-weight: 600;">SIGNAL: {{ item.signal_score }}/10</span>
                         </td>
                       </tr>
                     </table>
@@ -295,17 +290,24 @@
             {% endif %}
           </table>
 
+          <!-- CALL TO ACTION -->
+          <div style="text-align: center; margin: 32px 0 16px 0;">
+            <a href="{{ base_url }}/feeds" style="background-color: #164A41; color: #FFFFFF; border: 2px solid #F1B24A; padding: 12px 28px; text-decoration: none; border-radius: 6px; font-size: 13px; font-weight: bold; display: inline-block; text-transform: uppercase; letter-spacing: 1px;">
+              Open Live Intelligence Terminal &rarr;
+            </a>
+          </div>
+
         </td>
       </tr>
 
       <!-- FOOTER -->
       <tr>
         <td style="padding: 32px 24px; background-color: #F8FAF8; border-top: 1px solid #9DC88D; text-align: center;">
-          <div style="font-size: 11px; color: #4D774E; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; font-weight: bold;">
+          <div style="font-size: 11px; color: #4D774E; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; font-weight: bold;">
             URIVALENT INTELLIGENCE PIPELINE
           </div>
           <div style="font-size: 12px; color: #164A41; margin-bottom: 16px;">
-            Delivered automatically at 08:50 AM EAT. Built for AI engineers and investors.
+            Prepared exclusively for <strong>{{ username or 'Analyst' }}</strong>.
           </div>
           <div style="font-size: 11px; text-transform: uppercase; font-weight: bold;">
             <a href="{{ unsubscribe_url }}" style="color: #F1B24A; text-decoration: none;">

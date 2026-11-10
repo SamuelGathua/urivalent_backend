@@ -11,6 +11,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from database.db_client import db_client
+from ingestion.models import normalize_datetime_str
 
 logger = logging.getLogger("urivalent.engine.intelligence")
 if not logger.handlers:
@@ -248,14 +249,21 @@ def classify_cluster_rule_based(cluster: Dict[str, Any]) -> Dict[str, Any]:
     raw_summary = primary.get("summary", "")
     sentences = [s.strip() for s in re.split(r"(?<=[.!?]) +", raw_summary) if s.strip()]
 
-    what_happened = sentences[0] if sentences else f"{detected_entity} announced major developments relevant to {pillar}."
+    what_happened = sentences[0] if sentences else f"{detected_entity} disclosed developments related to {pillar}."
     if len(what_happened) > 220:
         what_happened = what_happened[:217] + "..."
 
-    tech_summary = sentences[1] if len(sentences) > 1 else f"Technical deployment centers on optimized {pillar.lower()} infrastructure and architectural integration."
-    strategic_summary = (
-        f"Signals expanding enterprise demand and defensible supply constraints for {detected_entity} within the AI ecosystem."
-    )
+    if len(sentences) > 1:
+        tech_summary = sentences[1]
+    elif len(raw_summary) > 60:
+        tech_summary = raw_summary[:220].strip()
+    else:
+        tech_summary = f"Engineering focus addresses {pillar.lower()} infrastructure constraints and deployment for {detected_entity}."
+
+    if len(sentences) > 2:
+        strategic_summary = sentences[2]
+    else:
+        strategic_summary = f"Expands technical leverage and ecosystem footprint for {detected_entity} across {pillar.lower()}."
 
     return {
         "cluster_id": cluster["cluster_id"],
@@ -269,13 +277,13 @@ def classify_cluster_rule_based(cluster: Dict[str, Any]) -> Dict[str, Any]:
         "signal_score": score,
         "source_urls": json.dumps(cluster["source_urls"]),
         "image_url": cluster.get("primary_image"),
-        "published_at": cluster.get("published_at"),
+        "published_at": normalize_datetime_str(cluster.get("published_at")),
         "is_dispatched": 0
     }
 
 
 def synthesize_clusters_with_groq(clusters: List[Dict[str, Any]], groq_api_key: str) -> Optional[List[Dict[str, Any]]]:
-    """Call Groq API (llama-3.3-70b-versatile) with JSON response mode."""
+    """Call Groq API with automatic model failover and JSON response mode."""
     try:
         from groq import Groq
         client = Groq(api_key=groq_api_key)
@@ -310,42 +318,64 @@ def synthesize_clusters_with_groq(clusters: List[Dict[str, Any]], groq_api_key: 
             "- signal_score: integer between 1 and 10\n"
         )
 
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(prompt_payload)}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            timeout=30
-        )
+        candidate_models = [
+            os.getenv("GROQ_MODEL", "").strip(),
+            "openai/gpt-oss-120b",
+            "qwen/qwen3.8-27b",
+            "llama-3.1-8b-instant",
+        ]
+        candidate_models = [m for m in candidate_models if m]
 
-        content = response.choices[0].message.content
-        data = json.loads(content)
-        items = data.get("synthesized", data.get("items", []))
-        if items and isinstance(items, list):
-            # Match cluster metadata
-            cluster_map = {c["cluster_id"]: c for c in clusters}
-            enriched = []
-            for it in items:
-                cid = it.get("cluster_id")
-                c_meta = cluster_map.get(cid, {})
-                it["source_urls"] = json.dumps(c_meta.get("source_urls", []))
-                it["image_url"] = c_meta.get("primary_image")
-                it["published_at"] = c_meta.get("published_at", datetime.now(timezone.utc).isoformat())
-                it["is_dispatched"] = 0
-                enriched.append(it)
-            return enriched
+        for model_name in candidate_models:
+            try:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(prompt_payload)}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                    timeout=45
+                )
+
+                content = response.choices[0].message.content
+                data = json.loads(content)
+                items = data.get("synthesized", data.get("items", []))
+                if items and isinstance(items, list):
+                    cluster_map = {c["cluster_id"]: c for c in clusters}
+                    enriched = []
+                    for it in items:
+                        cid = it.get("cluster_id")
+                        c_meta = cluster_map.get(cid, {})
+                        it["source_urls"] = json.dumps(c_meta.get("source_urls", []))
+                        it["image_url"] = c_meta.get("primary_image")
+                        raw_pub = c_meta.get("published_at", datetime.now(timezone.utc).isoformat())
+                        it["published_at"] = normalize_datetime_str(raw_pub)
+                        it["is_dispatched"] = 0
+                        enriched.append(it)
+                    logger.info(f"Successfully synthesized {len(enriched)} clusters using Groq ({model_name}).")
+                    return enriched
+            except Exception as model_err:
+                logger.warning(f"Groq model '{model_name}' failed: {model_err}, trying next candidate...")
+                continue
     except Exception as e:
         logger.warning(f"Groq LLM synthesis encountered an issue: {e}")
     return None
 
 
 def synthesize_clusters_with_gemini(clusters: List[Dict[str, Any]], gemini_api_key: str) -> Optional[List[Dict[str, Any]]]:
-    """Fallback: Call Google Gemini REST API."""
+    """Fallback: Call Google Gemini REST API with candidate model failover."""
     try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_api_key}"
+        candidate_gemini_models = [
+            os.getenv("GEMINI_MODEL", "").strip(),
+            "gemini-3.8-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-flash-latest",
+            "gemini-1.5-flash"
+        ]
+        candidate_gemini_models = [m for m in candidate_gemini_models if m]
+
         prompt_payload = [
             {"cluster_id": c["cluster_id"], "headline": c["primary_title"], "summaries": [it.get("summary") for it in c["items"][:3]]}
             for c in clusters
@@ -362,24 +392,35 @@ def synthesize_clusters_with_gemini(clusters: List[Dict[str, Any]], gemini_api_k
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}
         }
 
-        resp = requests.post(url, json=body, timeout=30)
-        if resp.status_code == 200:
-            result = resp.json()
-            text_resp = result["candidates"][0]["content"]["parts"][0]["text"]
-            data = json.loads(text_resp)
-            items = data.get("synthesized", data.get("items", []))
-            if items and isinstance(items, list):
-                cluster_map = {c["cluster_id"]: c for c in clusters}
-                enriched = []
-                for it in items:
-                    cid = it.get("cluster_id")
-                    c_meta = cluster_map.get(cid, {})
-                    it["source_urls"] = json.dumps(c_meta.get("source_urls", []))
-                    it["image_url"] = c_meta.get("primary_image")
-                    it["published_at"] = c_meta.get("published_at", datetime.now(timezone.utc).isoformat())
-                    it["is_dispatched"] = 0
-                    enriched.append(it)
-                return enriched
+        for model_name in candidate_gemini_models:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
+                resp = requests.post(url, json=body, timeout=30)
+                if resp.status_code == 200:
+                    result = resp.json()
+                    candidates = result.get("candidates", [])
+                    if not candidates:
+                        continue
+                    text_resp = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    data = json.loads(text_resp)
+                    items = data.get("synthesized", data.get("items", []))
+                    if items and isinstance(items, list):
+                        cluster_map = {c["cluster_id"]: c for c in clusters}
+                        enriched = []
+                        for it in items:
+                            cid = it.get("cluster_id")
+                            c_meta = cluster_map.get(cid, {})
+                            it["source_urls"] = json.dumps(c_meta.get("source_urls", []))
+                            it["image_url"] = c_meta.get("primary_image")
+                            raw_pub = c_meta.get("published_at", datetime.now(timezone.utc).isoformat())
+                            it["published_at"] = normalize_datetime_str(raw_pub)
+                            it["is_dispatched"] = 0
+                            enriched.append(it)
+                        logger.info(f"Successfully synthesized {len(enriched)} clusters using Gemini ({model_name}).")
+                        return enriched
+            except Exception as g_err:
+                logger.warning(f"Gemini model '{model_name}' failed: {g_err}")
+                continue
     except Exception as e:
         logger.warning(f"Gemini synthesis fallback encountered an issue: {e}")
     return None
@@ -445,7 +486,7 @@ def persist_synthesized_intelligence(synthesized_items: List[Dict[str, Any]]) ->
             int(it.get("signal_score", 5)),
             it.get("source_urls", "[]"),
             it.get("image_url"),
-            it.get("published_at", datetime.now(timezone.utc).isoformat()),
+            normalize_datetime_str(it.get("published_at")),
             int(it.get("is_dispatched", 0))
         ))
 

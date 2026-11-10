@@ -27,6 +27,7 @@ from delivery.news_email_sender import (
     send_test_email,
     fetch_intelligence_for_brief,
     fetch_market_snapshots_for_brief,
+    fetch_market_categories_for_brief,
     fetch_code_and_paper_snapshots,
     get_daily_greeting
 )
@@ -48,6 +49,23 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 
+async def startup_freshness_check():
+    """Non-blocking background worker to ensure fresh intelligence if data is stale."""
+    await asyncio.sleep(2)  # Allow server to complete binding port
+    try:
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        latest_market = db_client.fetchone("SELECT date FROM compute_market_snapshots ORDER BY date DESC, id DESC LIMIT 1;")
+        is_stale = not latest_market or latest_market.get("date") != today_str
+
+        if is_stale:
+            logger.info("Market data is stale or missing for today. Triggering automatic startup refresh...")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, run_news_cycle)
+            logger.info("Startup intelligence refresh completed successfully.")
+    except Exception as e:
+        logger.warning(f"Startup freshness check encountered: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager: Initializes DB and triggers background scheduler."""
@@ -59,6 +77,7 @@ async def lifespan(app: FastAPI):
 
     logger.info("Starting background scheduler service...")
     start_scheduler()
+    asyncio.create_task(startup_freshness_check())
     yield
     logger.info("Shutting down background scheduler...")
     stop_scheduler()
@@ -74,9 +93,24 @@ app = FastAPI(
 # ------------------------------------------------------------------------------
 # 1. CORS CONFIGURATION (PUBLIC INTELLIGENCE FEED + ADMIN CONSOLE)
 # ------------------------------------------------------------------------------
+cors_origins_env = os.getenv("CORS_ORIGINS", "")
+allowed_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://urivalent.tech",
+    "https://www.urivalent.tech",
+    "https://api.urivalent.tech",
+]
+if cors_origins_env:
+    for o in cors_origins_env.split(","):
+        o_clean = o.strip()
+        if o_clean and o_clean not in allowed_origins:
+            allowed_origins.append(o_clean)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -117,10 +151,11 @@ def get_intelligence_feed():
     try:
         tier1_items, pillar_groups = fetch_intelligence_for_brief()
         market_tickers = fetch_market_snapshots_for_brief()
+        market_categories = fetch_market_categories_for_brief()
         trending_repos, trending_papers, arxiv_count = fetch_code_and_paper_snapshots()
 
         base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
-        logo_url = os.getenv("LOGO_URL", f"{base_url}/assets/urivalent_logo.jfif")
+        logo_url = os.getenv("LOGO_URL", f"{base_url}/assets/urivalent_logo.png")
         if not logo_url.startswith("http"):
             logo_url = f"{base_url}{logo_url}"
 
@@ -138,6 +173,7 @@ def get_intelligence_feed():
                 "total_arxiv_count": arxiv_count
             },
             "market_tickers": market_tickers,
+            "market_categories": market_categories,
             "tier1_items": tier1_items,
             "pillar_groups": pillar_groups,
             "trending_repos": trending_repos,
