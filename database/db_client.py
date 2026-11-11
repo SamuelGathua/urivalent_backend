@@ -187,13 +187,7 @@ class DatabaseClient:
             finally:
                 conn.close()
 
-        # Seed default test subscriber
-        seed_query = """
-        INSERT OR IGNORE INTO users (username, email, is_active, is_verified, is_subscribed)
-        VALUES (?, ?, 1, 1, 1);
-        """
-        self.execute(seed_query, ("test_subscriber", "test@urivalent.com"))
-        logger.info("Database schema initialized and default subscriber seeded successfully.")
+        logger.info("Database schema initialized successfully.")
 
 
 # Global default client singleton
