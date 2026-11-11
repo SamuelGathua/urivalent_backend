@@ -123,12 +123,12 @@ def configure_scheduler_jobs():
         replace_existing=True
     )
 
-    # 2. Intraday Ingestion Cycle: Every 30 mins, mon-fri 09:00-15:30 EAT
+    # 2. Ingestion Cycle: Every 30 mins for 24 hours daily (mon-sun)
     scheduler.add_job(
         run_news_cycle,
-        trigger=CronTrigger(day_of_week="mon-fri", hour="9-15", minute="0,30", timezone=NAIROBI_TZ),
+        trigger=CronTrigger(minute="0,30", timezone=NAIROBI_TZ),
         id="urivalent_intraday_cycle",
-        name="Urivalent Intraday Ingestion (Every 30m, 09:00-15:30 EAT)",
+        name="Urivalent Ingestion (Every 30m, 24 Hours EAT)",
         replace_existing=True
     )
 
