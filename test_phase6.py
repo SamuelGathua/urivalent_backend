@@ -37,7 +37,7 @@ def test_phase6():
         # GET /
         resp_root = client.get("/")
         assert resp_root.status_code == 200, f"Root returned {resp_root.status_code}"
-        print(f"  [OK] GET / -> HTTP 200: {resp_root.json()}")
+        print(f"  [OK] GET / -> HTTP 200 (Length: {len(resp_root.text)})")
 
         # GET /health
         resp_health = client.get("/health")

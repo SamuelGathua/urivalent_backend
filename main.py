@@ -9,12 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, HTTPException, Query, Header, Depends, Request, Form, Body, status
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Header, Depends, Request, Form, Body, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
+from qstash import Receiver
 
 # Ensure backend root on path
 backend_dir = Path(__file__).resolve().parent
@@ -26,6 +27,7 @@ from delivery.news_email_sender import (
     compile_brief_html,
     verify_unsubscribe_token,
     send_test_email,
+    send_daily_news_brief,
     fetch_intelligence_for_brief,
     fetch_market_snapshots_for_brief,
     fetch_market_categories_for_brief,
@@ -136,6 +138,11 @@ class TestEmailPayload(BaseModel):
 class AdminLoginRequest(BaseModel):
     username: str
     password: str
+
+
+class DeleteUserRequest(BaseModel):
+    id: Optional[int] = None
+    email: Optional[str] = None
 
 
 # ------------------------------------------------------------------------------
@@ -386,8 +393,203 @@ def api_send_morning_brief(
         raise HTTPException(status_code=500, detail=result.get("error", "Morning brief execution failed."))
 
 
+@app.get("/admin/users")
+@app.get("/admin/subscribers")
+def api_get_admin_users(
+    admin: dict = Depends(require_admin)
+):
+    """
+    Fetches user and subscriber records directly from the database for the executive admin console.
+    Protected by require_admin.
+    """
+    try:
+        users = db_client.fetchall(
+            """
+            SELECT id, username, email, is_active, is_verified, is_subscribed, created_at 
+            FROM users 
+            ORDER BY id DESC;
+            """
+        )
+        return {
+            "status": "success",
+            "count": len(users),
+            "users": users
+        }
+    except Exception as e:
+        logger.error(f"Error reading users from database: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Database query error: {str(e)}")
+
+
+@app.delete("/admin/users/{user_id}")
+@app.delete("/admin/subscribers/{user_id}")
+def api_delete_admin_user_by_id(
+    user_id: int,
+    admin: dict = Depends(require_admin)
+):
+    """
+    Deletes a subscriber's details directly from the database (master unsubscribe).
+    Removes the subscriber from both `users` and `subscribers` tables.
+    Protected by require_admin.
+    """
+    try:
+        user = db_client.fetchone("SELECT id, username, email FROM users WHERE id = ?;", (user_id,))
+        if not user:
+            raise HTTPException(status_code=404, detail=f"Subscriber with ID {user_id} was not found in the database.")
+
+        target_email = user.get("email")
+
+        # 1. Permanently delete from users table
+        db_client.execute("DELETE FROM users WHERE id = ?;", (user_id,))
+
+        # 2. Also delete from subscribers table if it exists
+        if target_email:
+            try:
+                db_client.execute("DELETE FROM subscribers WHERE email = ?;", (target_email,))
+            except Exception as e:
+                logger.warning(f"Note: Could not delete from subscribers table: {e}")
+
+        logger.info(f"Admin '{admin.get('username')}' master-deleted subscriber {target_email} (ID: {user_id}).")
+        return {
+            "status": "success",
+            "message": f"Subscriber {target_email} has been permanently deleted and master-unsubscribed.",
+            "deleted_id": user_id,
+            "deleted_email": target_email
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting subscriber ID {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Database deletion error: {str(e)}")
+
+
+@app.delete("/admin/users")
+@app.delete("/admin/subscribers")
+def api_delete_admin_user(
+    req: Optional[DeleteUserRequest] = Body(None),
+    id: Optional[int] = Query(None),
+    email: Optional[str] = Query(None),
+    admin: dict = Depends(require_admin)
+):
+    """
+    Alternative delete endpoint supporting query params or JSON body (id or email).
+    Protected by require_admin.
+    """
+    target_id = (req.id if req and req.id is not None else None) or id
+    target_email = (req.email if req and req.email else None) or email
+
+    if target_id is None and not target_email:
+        raise HTTPException(status_code=400, detail="Missing required 'id' or 'email' parameter.")
+
+    try:
+        if target_id is not None:
+            user = db_client.fetchone("SELECT id, username, email FROM users WHERE id = ?;", (target_id,))
+        else:
+            user = db_client.fetchone("SELECT id, username, email FROM users WHERE email = ?;", (target_email,))
+
+        if not user:
+            raise HTTPException(status_code=404, detail="Subscriber record not found in the database.")
+
+        uid = user.get("id")
+        uemail = user.get("email")
+
+        db_client.execute("DELETE FROM users WHERE id = ?;", (uid,))
+        if uemail:
+            try:
+                db_client.execute("DELETE FROM subscribers WHERE email = ?;", (uemail,))
+            except Exception:
+                pass
+
+        logger.info(f"Admin '{admin.get('username')}' master-deleted subscriber {uemail} (ID: {uid}).")
+        return {
+            "status": "success",
+            "message": f"Subscriber {uemail} has been permanently deleted and master-unsubscribed.",
+            "deleted_id": uid,
+            "deleted_email": uemail
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting subscriber: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Database deletion error: {str(e)}")
+
+
 # ------------------------------------------------------------------------------
-# 4. HEALTH, PREVIEWS & UNSUBSCRIBE
+# 4. CRYPTOGRAPHICALLY VERIFIED QSTASH NOTIFICATION TRIGGER
+# ------------------------------------------------------------------------------
+
+router = APIRouter()
+
+# Initialize the QStash receiver with environment variables
+receiver = Receiver(
+    current_signing_key=os.environ.get("QSTASH_CURRENT_SIGNING_KEY"),
+    next_signing_key=os.environ.get("QSTASH_NEXT_SIGNING_KEY"),
+)
+
+@router.post("/api/trigger-notifications")
+async def trigger_scheduled_emails(request: Request):
+    signature = request.headers.get("Upstash-Signature")
+    
+    if not signature:
+        raise HTTPException(status_code=401, detail="Missing QStash signature")
+        
+    body = await request.body()
+    
+    # 1. Strict Security Check: Cryptographically verify QStash sent this
+    try:
+        active_receiver = receiver
+        current_k = os.environ.get("QSTASH_CURRENT_SIGNING_KEY")
+        next_k = os.environ.get("QSTASH_NEXT_SIGNING_KEY")
+        if (current_k or next_k) and (active_receiver._current_signing_key != current_k or active_receiver._next_signing_key != next_k):
+            active_receiver = Receiver(current_signing_key=current_k, next_signing_key=next_k)
+
+        expected_url = os.environ.get("QSTASH_TRIGGER_URL", "https://api.urivalent.tech/api/trigger-notifications")
+        active_receiver.verify(
+            body=body.decode("utf-8"),
+            signature=signature,
+            url=expected_url # Must match exactly
+        )
+    except Exception as e:
+        logger.warning(f"QStash cryptographic signature verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid execution signature")
+    
+    # 2. Execute Notification Logic
+    try:
+        logger.info("Executing QStash-verified daily notification dispatch via Resend...")
+        loop = asyncio.get_running_loop()
+
+        # Check if custom payload requested full morning cycle vs direct brief dispatch
+        payload = {}
+        if body:
+            try:
+                import json
+                payload = json.loads(body.decode("utf-8"))
+            except Exception:
+                pass
+
+        if payload.get("full_cycle") or payload.get("action") == "full_cycle":
+            dispatch_report = await loop.run_in_executor(None, run_daily_morning_brief_job)
+        else:
+            dispatch_report = await loop.run_in_executor(None, send_daily_news_brief)
+
+        if isinstance(dispatch_report, dict) and dispatch_report.get("status") == "error":
+            raise RuntimeError(dispatch_report.get("error", "Failed to dispatch daily notification briefing."))
+
+        logger.info(f"QStash notification dispatch completed successfully: {dispatch_report}")
+        return {
+            "status": "success",
+            "message": "Notifications dispatched and verified by QStash.",
+            "report": dispatch_report
+        }
+    except Exception as e:
+        logger.error(f"Error in QStash notification pipeline: {e}", exc_info=True)
+        # If this fails, returning a 500 tells QStash to retry later
+        raise HTTPException(status_code=500, detail=str(e))
+
+app.include_router(router)
+
+
+# ------------------------------------------------------------------------------
+# 5. HEALTH, PREVIEWS & UNSUBSCRIBE
 # ------------------------------------------------------------------------------
 
 @app.get("/health")
