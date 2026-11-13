@@ -78,7 +78,7 @@ def clean_html_snippet(raw_html: str, max_chars: int = 400) -> str:
     return text[:max_chars].strip()
 
 
-def parse_feed_safely(feed_info: Dict[str, str], max_items_per_feed: int = 6, timeout: int = 12) -> List[Dict[str, Any]]:
+def parse_feed_safely(feed_info: Dict[str, str], max_items_per_feed: Optional[int] = None, timeout: int = 12) -> List[Dict[str, Any]]:
     """Fetch an RSS/Atom feed using custom User-Agent and timeouts, returning RawIntelItems."""
     feed_name = feed_info["name"]
     feed_url = feed_info["url"]
@@ -98,7 +98,7 @@ def parse_feed_safely(feed_info: Dict[str, str], max_items_per_feed: int = 6, ti
             return items
 
         parsed = feedparser.parse(resp.content)
-        entries = parsed.entries[:max_items_per_feed]
+        entries = parsed.entries if max_items_per_feed is None else parsed.entries[:max_items_per_feed]
 
         for entry in entries:
             title = entry.get("title", "").strip()
@@ -146,11 +146,11 @@ def parse_feed_safely(feed_info: Dict[str, str], max_items_per_feed: int = 6, ti
     return items
 
 
-def fetch_rss_feeds(max_per_feed: int = 5) -> List[Dict[str, Any]]:
+def fetch_rss_feeds(max_per_feed: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Stream A Master Runner:
     Polls Official Labs, Hardware, Energy, Substack Curators, and Policy Feeds.
-    Returns normalized RawIntelItem dictionaries.
+    Returns normalized RawIntelItem dictionaries without artificial per-feed caps when max_per_feed is None.
     """
     all_items: List[Dict[str, Any]] = []
     logger.info(f"Initiating Stream A RSS ingestion across {len(ALL_RSS_FEEDS)} targeted feeds...")

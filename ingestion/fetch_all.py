@@ -37,7 +37,7 @@ def fetch_from_sources(
     if include_rss:
         try:
             logger.info("Executing Ingestion Stream A (RSS & Atom Feeds)...")
-            rss_items = fetch_rss_feeds(max_per_feed=4)
+            rss_items = fetch_rss_feeds(max_per_feed=None)
             all_raw_items.extend(rss_items)
             logger.info(f"Stream A contributed {len(rss_items)} items.")
         except Exception as e:
@@ -47,7 +47,7 @@ def fetch_from_sources(
     if include_social:
         try:
             logger.info("Executing Ingestion Stream B (Social & Community Bridge)...")
-            social_items = fetch_social_bridge(scrape_telegram=True, max_hn=10)
+            social_items = fetch_social_bridge(scrape_telegram=True, max_hn=50)
             all_raw_items.extend(social_items)
             logger.info(f"Stream B contributed {len(social_items)} items.")
         except Exception as e:

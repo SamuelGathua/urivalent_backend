@@ -72,13 +72,12 @@ def fetch_intelligence_for_brief() -> Tuple[List[Dict[str, Any]], Dict[str, List
     query = """
     SELECT * FROM ai_intelligence_items
     WHERE published_at >= ?
-    ORDER BY signal_score DESC, published_at DESC, id DESC
-    LIMIT 40;
+    ORDER BY signal_score DESC, published_at DESC, id DESC;
     """
     rows = db_client.fetchall(query, (cutoff,))
     if not rows or len(rows) < 5:
         # Fallback to the latest available items ordered by recency
-        rows = db_client.fetchall("SELECT * FROM ai_intelligence_items ORDER BY published_at DESC, signal_score DESC, id DESC LIMIT 40;")
+        rows = db_client.fetchall("SELECT * FROM ai_intelligence_items ORDER BY published_at DESC, signal_score DESC, id DESC;")
 
     tier1_items: List[Dict[str, Any]] = []
     pillar_groups: Dict[str, List[Dict[str, Any]]] = {p: [] for p in CANONICAL_PILLARS}
@@ -211,8 +210,6 @@ def fetch_code_and_paper_snapshots() -> Tuple[List[Dict[str, Any]], List[Dict[st
         if name and name not in seen_repos:
             seen_repos.add(name)
             repos.append(r)
-            if len(repos) >= 4:
-                break
 
     # Paper snapshots: prioritize newest date, then upvotes
     paper_rows = db_client.fetchall("SELECT * FROM research_paper_snapshots ORDER BY date DESC, upvotes DESC, id DESC;")
@@ -223,8 +220,6 @@ def fetch_code_and_paper_snapshots() -> Tuple[List[Dict[str, Any]], List[Dict[st
         if pid and pid not in seen_papers:
             seen_papers.add(pid)
             papers.append(p)
-            if len(papers) >= 4:
-                break
 
     # Estimate total 24h arXiv count from today's snapshots or fallback
     arxiv_count = len([p for p in paper_rows if p.get("source") == "arXiv"])

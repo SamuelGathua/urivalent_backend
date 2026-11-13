@@ -46,7 +46,7 @@ def fetch_github_velocity(persist_to_db: bool = True) -> Tuple[List[Dict[str, An
 
     for q in queries:
         try:
-            url = f"https://api.github.com/search/repositories?q={q}&sort=stars&order=desc&per_page=15"
+            url = f"https://api.github.com/search/repositories?q={q}&sort=stars&order=desc&per_page=100"
             resp = requests.get(url, headers=headers, timeout=12)
             if resp.status_code == 200:
                 data = resp.json()
@@ -63,14 +63,13 @@ def fetch_github_velocity(persist_to_db: bool = True) -> Tuple[List[Dict[str, An
         except Exception as e:
             logger.error(f"Error querying GitHub API ({q}): {e}")
 
-    # Sort repos by star count descending
+    # Sort repos by star count descending - keep all scraped repositories without capping
     repos.sort(key=lambda x: x.get("stargazers_count", 0), reverse=True)
-    top_10 = repos[:10]
 
     intel_items: List[Dict[str, Any]] = []
     snapshots: List[Dict[str, Any]] = []
 
-    for idx, repo in enumerate(top_10):
+    for idx, repo in enumerate(repos):
         repo_name = repo.get("full_name", "")
         repo_url = repo.get("html_url", "")
         language = repo.get("language") or "Python"
@@ -106,21 +105,20 @@ def fetch_github_velocity(persist_to_db: bool = True) -> Tuple[List[Dict[str, An
             "description": description
         })
 
-        # Emit top 5 as RawIntelItem
-        if idx < 5:
-            headline = f"GITHUB VELOCITY: {repo_name} (★ {total_stars:,} stars, +{stars_gained} surge)"
-            summary = (
-                f"High-velocity repository '{repo_name}' written in {language}. "
-                f"Description: {description}. Total stars: {total_stars:,}."
-            )
-            intel_items.append(make_raw_intel_item(
-                title=headline,
-                link=repo_url,
-                summary=summary,
-                source="GitHub",
-                source_badge="GH",
-                published_at=repo.get("pushed_at", datetime.now(timezone.utc).isoformat())
-            ))
+        # Emit every repository into the intelligence pipeline
+        headline = f"GITHUB VELOCITY: {repo_name} (★ {total_stars:,} stars, +{stars_gained} surge)"
+        summary = (
+            f"High-velocity repository '{repo_name}' written in {language}. "
+            f"Description: {description}. Total stars: {total_stars:,}."
+        )
+        intel_items.append(make_raw_intel_item(
+            title=headline,
+            link=repo_url,
+            summary=summary,
+            source="GitHub",
+            source_badge="GH",
+            published_at=repo.get("pushed_at", datetime.now(timezone.utc).isoformat())
+        ))
 
     logger.info(f"GitHub Velocity Tracker stored {len(snapshots)} snapshots, emitted {len(intel_items)} RawIntelItems.")
     return intel_items, snapshots
@@ -149,7 +147,7 @@ def fetch_huggingface_papers(persist_to_db: bool = True) -> List[Dict[str, Any]]
             if isinstance(papers_data, list):
                 # Sort by upvotes descending
                 papers_data.sort(key=lambda p: p.get("paper", {}).get("upvotes", 0) if isinstance(p.get("paper"), dict) else p.get("upvotes", 0), reverse=True)
-                for item in papers_data[:6]:
+                for item in papers_data:
                     paper_obj = item.get("paper", item)
                     paper_id = paper_obj.get("id") or item.get("id", "")
                     title = paper_obj.get("title", "")
@@ -182,12 +180,12 @@ def fetch_huggingface_papers(persist_to_db: bool = True) -> List[Dict[str, Any]]
         logger.error(f"Error fetching HuggingFace Daily Papers: {e}")
 
     # 2. Hugging Face Trending Models / Open Weights
-    trending_models_url = "https://huggingface.co/api/models?sort=likes7d&direction=-1&limit=5"
+    trending_models_url = "https://huggingface.co/api/models?sort=likes7d&direction=-1&limit=50"
     try:
         resp = requests.get(trending_models_url, headers=headers, timeout=12)
         if resp.status_code == 200:
             models_data = resp.json()
-            for m in models_data[:3]:
+            for m in models_data:
                 model_id = m.get("id", "")
                 likes = m.get("likes", 0)
                 downloads = m.get("downloads", 0)
@@ -231,7 +229,7 @@ def fetch_arxiv_radar(persist_to_db: bool = True) -> Tuple[List[Dict[str, Any]],
             total_new_papers_count += cat_count
             logger.info(f"arXiv {cat}: found {cat_count} recent papers.")
 
-            for entry in entries[:3]:  # Capture top 3 per category
+            for entry in entries:  # Process all entries from arXiv RSS feed
                 raw_title = entry.get("title", "")
                 # Clean arXiv title format e.g. "Title. (arXiv:2401.xxxx [cs.AI])"
                 clean_title = re.sub(r"\(arXiv:[^)]+\)", "", raw_title).strip()

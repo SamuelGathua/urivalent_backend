@@ -89,7 +89,7 @@ def scrape_og_metadata(url: str, timeout: int = 8) -> Dict[str, Optional[str]]:
 # STREAM B1: HACKER NEWS ALGOLIA API
 # ==============================================================================
 
-def fetch_hacker_news_algolia(min_points: int = 80, max_items: int = 12) -> List[Dict[str, Any]]:
+def fetch_hacker_news_algolia(min_points: int = 80, max_items: int = 50) -> List[Dict[str, Any]]:
     """
     Query Hacker News Algolia Search API for AI, compute, GPU, and nuclear stories
     with points > min_points. Emits RawIntelItem (badge: 'HN').
@@ -100,7 +100,7 @@ def fetch_hacker_news_algolia(min_points: int = 80, max_items: int = 12) -> List
 
     for q in queries:
         try:
-            url = f"https://hn.algolia.com/api/v1/search_by_date?query={q}&tags=story&numericFilters=points>{min_points}&hitsPerPage=10"
+            url = f"https://hn.algolia.com/api/v1/search_by_date?query={q}&tags=story&numericFilters=points>{min_points}&hitsPerPage=30"
             resp = requests.get(url, headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=10)
             if resp.status_code != 200:
                 logger.warning(f"HN Algolia returned HTTP {resp.status_code} for query: {q}")
@@ -385,7 +385,7 @@ def fetch_bridged_x_researchers(max_items: int = 5) -> List[Dict[str, Any]]:
 # STREAM B MASTER RUNNER
 # ==============================================================================
 
-def fetch_social_bridge(scrape_telegram: bool = True, max_hn: int = 10) -> List[Dict[str, Any]]:
+def fetch_social_bridge(scrape_telegram: bool = True, max_hn: int = 50) -> List[Dict[str, Any]]:
     """
     Stream B Master Runner:
     Queries HN Algolia API, Dual-Mode Telegram Ingestion, and Researcher Dispatches.
@@ -399,11 +399,11 @@ def fetch_social_bridge(scrape_telegram: bool = True, max_hn: int = 10) -> List[
 
     # 2. Telegram Dual-Mode Ingestion
     if scrape_telegram:
-        tg_items = fetch_telegram_channels(TARGET_TELEGRAM_CHANNELS[:3], max_posts_per_channel=2)
+        tg_items = fetch_telegram_channels(TARGET_TELEGRAM_CHANNELS, max_posts_per_channel=10)
         all_social.extend(tg_items)
 
     # 3. Researcher Dispatches
-    x_items = fetch_bridged_x_researchers(max_items=3)
+    x_items = fetch_bridged_x_researchers(max_items=10)
     all_social.extend(x_items)
 
     logger.info(f"Stream B completed. Scraped {len(all_social)} social & community intel items.")

@@ -426,36 +426,46 @@ def synthesize_clusters_with_gemini(clusters: List[Dict[str, Any]], gemini_api_k
     return None
 
 
-def synthesize_clusters(clusters: List[Dict[str, Any]], top_n: int = 18) -> List[Dict[str, Any]]:
+def synthesize_clusters(clusters: List[Dict[str, Any]], top_n: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Stage 2 Master Runner:
-    Takes top N clusters, passes through Groq -> Gemini -> Rule-based fallback.
+    Takes clusters (all clusters by default when top_n is None, removing artificial caps),
+    processes them in resilient batches through Groq -> Gemini -> Rule-based fallback.
     Returns list of fully synthesized intelligence dictionaries.
     """
-    target_clusters = clusters[:top_n]
+    target_clusters = clusters if top_n is None else clusters[:top_n]
     if not target_clusters:
         return []
 
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    synthesized: Optional[List[Dict[str, Any]]] = None
 
-    # 1. Try Groq
-    if groq_key:
-        logger.info(f"Executing LLM synthesis pass with Groq (llama-3.3-70b-versatile) on {len(target_clusters)} clusters...")
-        synthesized = synthesize_clusters_with_groq(target_clusters, groq_key)
+    # Process in batches of 15 clusters to prevent LLM token overflow and ensure all items are synthesized
+    BATCH_SIZE = 15
+    all_synthesized: List[Dict[str, Any]] = []
 
-    # 2. Try Gemini fallback
-    if not synthesized and gemini_key:
-        logger.info("Falling back to Google Gemini synthesis pass...")
-        synthesized = synthesize_clusters_with_gemini(target_clusters, gemini_key)
+    for i in range(0, len(target_clusters), BATCH_SIZE):
+        batch = target_clusters[i:i + BATCH_SIZE]
+        batch_synth: Optional[List[Dict[str, Any]]] = None
 
-    # 3. Rule-based deterministic synthesizer fallback
-    if not synthesized:
-        logger.info(f"Synthesizing {len(target_clusters)} clusters via deterministic taxonomy & heuristic rule engine...")
-        synthesized = [classify_cluster_rule_based(c) for c in target_clusters]
+        # 1. Try Groq
+        if groq_key:
+            logger.info(f"Synthesizing batch {i//BATCH_SIZE + 1} ({len(batch)} clusters) with Groq...")
+            batch_synth = synthesize_clusters_with_groq(batch, groq_key)
 
-    return synthesized
+        # 2. Try Gemini fallback
+        if not batch_synth and gemini_key:
+            logger.info(f"Falling back to Google Gemini for batch {i//BATCH_SIZE + 1} ({len(batch)} clusters)...")
+            batch_synth = synthesize_clusters_with_gemini(batch, gemini_key)
+
+        # 3. Rule-based deterministic synthesizer fallback
+        if not batch_synth:
+            logger.info(f"Synthesizing batch {i//BATCH_SIZE + 1} ({len(batch)} clusters) via deterministic taxonomy & heuristic rule engine...")
+            batch_synth = [classify_cluster_rule_based(c) for c in batch]
+
+        all_synthesized.extend(batch_synth)
+
+    return all_synthesized
 
 
 def persist_synthesized_intelligence(synthesized_items: List[Dict[str, Any]]) -> int:

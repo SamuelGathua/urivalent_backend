@@ -18,12 +18,12 @@ TARGET_QUERIES = [
 ]
 
 
-def fetch_gnews(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
+def fetch_gnews(api_key: str, max_items: int = 100) -> List[Dict[str, Any]]:
     """Poll GNews.io for targeted AI policy & funding queries."""
     if not api_key:
         return []
     items: List[Dict[str, Any]] = []
-    for q in TARGET_QUERIES[:2]:
+    for q in TARGET_QUERIES:
         try:
             url = f"https://gnews.io/api/v4/search?q={q}&lang=en&max={max_items}&token={api_key}"
             resp = requests.get(url, timeout=10)
@@ -44,18 +44,18 @@ def fetch_gnews(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
     return items
 
 
-def fetch_newsdata(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
+def fetch_newsdata(api_key: str, max_items: int = 100) -> List[Dict[str, Any]]:
     """Poll NewsData.io for targeted queries."""
     if not api_key:
         return []
     items: List[Dict[str, Any]] = []
-    for q in TARGET_QUERIES[:2]:
+    for q in TARGET_QUERIES:
         try:
             url = f"https://newsdata.io/api/1/news?apikey={api_key}&q={q}&language=en"
             resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
-                for art in data.get("results", [])[:max_items]:
+                for art in data.get("results", []):
                     items.append(make_raw_intel_item(
                         title=art.get("title", ""),
                         link=art.get("link", ""),
@@ -70,7 +70,7 @@ def fetch_newsdata(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
     return items
 
 
-def fetch_thenewsapi(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
+def fetch_thenewsapi(api_key: str, max_items: int = 100) -> List[Dict[str, Any]]:
     """Poll TheNewsAPI.com for targeted queries."""
     if not api_key:
         return []
@@ -95,7 +95,7 @@ def fetch_thenewsapi(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
     return items
 
 
-def fetch_worldnewsapi(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
+def fetch_worldnewsapi(api_key: str, max_items: int = 100) -> List[Dict[str, Any]]:
     """Poll WorldNewsAPI for targeted queries."""
     if not api_key:
         return []
@@ -120,7 +120,7 @@ def fetch_worldnewsapi(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]
     return items
 
 
-def fetch_mediastack(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
+def fetch_mediastack(api_key: str, max_items: int = 100) -> List[Dict[str, Any]]:
     """Poll Mediastack for targeted queries."""
     if not api_key:
         return []
@@ -145,7 +145,7 @@ def fetch_mediastack(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
     return items
 
 
-def fetch_newsapi_org(api_key: str, max_items: int = 5) -> List[Dict[str, Any]]:
+def fetch_newsapi_org(api_key: str, max_items: int = 100) -> List[Dict[str, Any]]:
     """Poll NewsAPI.org for targeted queries."""
     if not api_key:
         return []
