@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 from datetime import datetime, timezone, timedelta
@@ -62,11 +63,52 @@ def get_daily_greeting() -> str:
     return GREETINGS[day_of_year % len(GREETINGS)]
 
 
+def clean_source_links(sources: Any) -> List[Dict[str, Any]]:
+    """
+    Deduplicates and caps source links to a maximum of 2.
+    If multiple sources are from the same publisher/domain, collapses to 1.
+    """
+    if not sources or not isinstance(sources, list):
+        return []
+    
+    unique_sources: List[Dict[str, Any]] = []
+    seen_names = set()
+    seen_links = set()
+
+    for s in sources:
+        if not isinstance(s, dict):
+            continue
+        link = (s.get("link") or "").strip()
+        source_name = (s.get("source") or "").strip()
+        if not link and not source_name:
+            continue
+        
+        # Clean verbose prefix e.g. "NewsAPI / The Verge" -> "The Verge"
+        clean_name = re.sub(r"^NewsAPI\s*/\s*", "", source_name, flags=re.IGNORECASE).strip()
+        norm_name = clean_name.lower()
+        norm_link = link.lower().rstrip("/")
+
+        if norm_name not in seen_names and norm_link not in seen_links:
+            seen_names.add(norm_name)
+            seen_links.add(norm_link)
+            unique_sources.append({
+                "title": s.get("title", ""),
+                "link": link,
+                "source": clean_name or "Source",
+                "badge": s.get("badge", "")
+            })
+        
+        if len(unique_sources) >= 2:
+            break
+            
+    return unique_sources
+
+
 def fetch_intelligence_for_brief() -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]]]:
     """
     Query ai_intelligence_items from the database (last 48 hours or latest batch).
     Separates items into Tier-1 breakthroughs (score >= 8) and Sector Pillars (score < 8).
-    Ensures recency is strictly preserved so fresh breaking items take precedence over old stories.
+    Deduplicates repeated news stories and caps verified source links to at most 2.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
     query = """
@@ -81,18 +123,26 @@ def fetch_intelligence_for_brief() -> Tuple[List[Dict[str, Any]], Dict[str, List
 
     tier1_items: List[Dict[str, Any]] = []
     pillar_groups: Dict[str, List[Dict[str, Any]]] = {p: [] for p in CANONICAL_PILLARS}
+    seen_headlines = set()
 
     for r in rows:
-        # Parse source URLs JSON
+        headline = (r.get("headline") or "").strip()
+        norm_hl = re.sub(r"[^a-zA-Z0-9]", "", headline).lower()
+        if not norm_hl or norm_hl in seen_headlines:
+            continue
+        seen_headlines.add(norm_hl)
+
+        # Parse source URLs JSON with strict deduplication and max 2 cap
         raw_sources = r.get("source_urls", "[]")
         try:
             parsed_sources = json.loads(raw_sources) if isinstance(raw_sources, str) else raw_sources
         except Exception:
             parsed_sources = []
-        r["parsed_sources"] = parsed_sources
+        r["parsed_sources"] = clean_source_links(parsed_sources)
 
         score = int(r.get("signal_score", 5))
-        pillar = r.get("pillar_category", "[MODELS & RESEARCH]")
+        raw_pillar = r.get("pillar_category", "[MODELS & RESEARCH]")
+        pillar = raw_pillar if raw_pillar.startswith("[") else f"[{raw_pillar}]"
 
         if score >= 8:
             tier1_items.append(r)
@@ -103,11 +153,13 @@ def fetch_intelligence_for_brief() -> Tuple[List[Dict[str, Any]], Dict[str, List
 
     # If no items scored >= 8, elevate the top 2 items so Priority Intelligence is never empty
     if not tier1_items and rows:
-        elevated = rows[:2]
+        elevated = [r for r in rows if (r.get("headline") or "").strip()][:2]
         for it in elevated:
-            pillar = it.get("pillar_category", "[MODELS & RESEARCH]")
+            raw_pillar = it.get("pillar_category", "[MODELS & RESEARCH]")
+            pillar = raw_pillar if raw_pillar.startswith("[") else f"[{raw_pillar}]"
             if pillar in pillar_groups and it in pillar_groups[pillar]:
                 pillar_groups[pillar].remove(it)
+            it["parsed_sources"] = clean_source_links(it.get("parsed_sources", []))
             tier1_items.append(it)
 
     return tier1_items, pillar_groups
