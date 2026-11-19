@@ -320,9 +320,9 @@ def synthesize_clusters_with_groq(clusters: List[Dict[str, Any]], groq_api_key: 
 
         candidate_models = [
             os.getenv("GROQ_MODEL", "").strip(),
+            "openai/gpt-oss-20b",
             "openai/gpt-oss-120b",
             "qwen/qwen3.8-27b",
-            "llama-3.1-8b-instant",
         ]
         candidate_models = [m for m in candidate_models if m]
 
@@ -336,6 +336,7 @@ def synthesize_clusters_with_groq(clusters: List[Dict[str, Any]], groq_api_key: 
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.2,
+                    max_tokens=1500,
                     timeout=45
                 )
 
@@ -370,9 +371,8 @@ def synthesize_clusters_with_gemini(clusters: List[Dict[str, Any]], gemini_api_k
         candidate_gemini_models = [
             os.getenv("GEMINI_MODEL", "").strip(),
             "gemini-3.8-flash",
-            "gemini-2.5-flash-lite",
             "gemini-flash-latest",
-            "gemini-1.5-flash"
+            "gemini-2.5-flash-lite",
         ]
         candidate_gemini_models = [m for m in candidate_gemini_models if m]
 
@@ -396,28 +396,31 @@ def synthesize_clusters_with_gemini(clusters: List[Dict[str, Any]], gemini_api_k
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
                 resp = requests.post(url, json=body, timeout=30)
-                if resp.status_code == 200:
-                    result = resp.json()
-                    candidates = result.get("candidates", [])
-                    if not candidates:
-                        continue
-                    text_resp = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                    data = json.loads(text_resp)
-                    items = data.get("synthesized", data.get("items", []))
-                    if items and isinstance(items, list):
-                        cluster_map = {c["cluster_id"]: c for c in clusters}
-                        enriched = []
-                        for it in items:
-                            cid = it.get("cluster_id")
-                            c_meta = cluster_map.get(cid, {})
-                            it["source_urls"] = json.dumps(c_meta.get("source_urls", []))
-                            it["image_url"] = c_meta.get("primary_image")
-                            raw_pub = c_meta.get("published_at", datetime.now(timezone.utc).isoformat())
-                            it["published_at"] = normalize_datetime_str(raw_pub)
-                            it["is_dispatched"] = 0
-                            enriched.append(it)
-                        logger.info(f"Successfully synthesized {len(enriched)} clusters using Gemini ({model_name}).")
-                        return enriched
+                if resp.status_code != 200:
+                    logger.warning(f"Gemini model '{model_name}' returned HTTP {resp.status_code}: {resp.text[:200]}")
+                    continue
+
+                result = resp.json()
+                candidates = result.get("candidates", [])
+                if not candidates:
+                    continue
+                text_resp = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                data = json.loads(text_resp)
+                items = data.get("synthesized", data.get("items", []))
+                if items and isinstance(items, list):
+                    cluster_map = {c["cluster_id"]: c for c in clusters}
+                    enriched = []
+                    for it in items:
+                        cid = it.get("cluster_id")
+                        c_meta = cluster_map.get(cid, {})
+                        it["source_urls"] = json.dumps(c_meta.get("source_urls", []))
+                        it["image_url"] = c_meta.get("primary_image")
+                        raw_pub = c_meta.get("published_at", datetime.now(timezone.utc).isoformat())
+                        it["published_at"] = normalize_datetime_str(raw_pub)
+                        it["is_dispatched"] = 0
+                        enriched.append(it)
+                    logger.info(f"Successfully synthesized {len(enriched)} clusters using Gemini ({model_name}).")
+                    return enriched
             except Exception as g_err:
                 logger.warning(f"Gemini model '{model_name}' failed: {g_err}")
                 continue
@@ -429,19 +432,20 @@ def synthesize_clusters_with_gemini(clusters: List[Dict[str, Any]], gemini_api_k
 def synthesize_clusters(clusters: List[Dict[str, Any]], top_n: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Stage 2 Master Runner:
-    Takes clusters (all clusters by default when top_n is None, removing artificial caps),
+    Takes clusters (capped by top_n if provided, or top 20 by default to prevent token/write exhaustion),
     processes them in resilient batches through Groq -> Gemini -> Rule-based fallback.
     Returns list of fully synthesized intelligence dictionaries.
     """
-    target_clusters = clusters if top_n is None else clusters[:top_n]
+    effective_limit = top_n if top_n is not None else 20
+    target_clusters = clusters[:effective_limit] if effective_limit else clusters
     if not target_clusters:
         return []
 
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
 
-    # Process in batches of 15 clusters to prevent LLM token overflow and ensure all items are synthesized
-    BATCH_SIZE = 15
+    # Process in batches of 5 clusters to respect OTPM limits (<=1,000 output tokens) and prevent token overflow
+    BATCH_SIZE = 5
     all_synthesized: List[Dict[str, Any]] = []
 
     for i in range(0, len(target_clusters), BATCH_SIZE):
@@ -516,7 +520,7 @@ def process_intelligence_pipeline(raw_items: List[Dict[str, Any]]) -> List[Dict[
     logger.info(f"Initiating AI Intelligence Engine pipeline on {len(raw_items)} raw items...")
     deduped = deduplicate_raw_items(raw_items)
     clusters = cluster_story_items(deduped)
-    synthesized = synthesize_clusters(clusters)
+    synthesized = synthesize_clusters(clusters, top_n=20)
     persist_synthesized_intelligence(synthesized)
     return synthesized
 

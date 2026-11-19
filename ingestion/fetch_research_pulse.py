@@ -63,8 +63,9 @@ def fetch_github_velocity(persist_to_db: bool = True) -> Tuple[List[Dict[str, An
         except Exception as e:
             logger.error(f"Error querying GitHub API ({q}): {e}")
 
-    # Sort repos by star count descending - keep all scraped repositories without capping
+    # Sort repos by star count descending - keep top 15 high-velocity repos to avoid DB write exhaustion
     repos.sort(key=lambda x: x.get("stargazers_count", 0), reverse=True)
+    repos = repos[:15]
 
     intel_items: List[Dict[str, Any]] = []
     snapshots: List[Dict[str, Any]] = []
@@ -89,12 +90,15 @@ def fetch_github_velocity(persist_to_db: bool = True) -> Tuple[List[Dict[str, An
 
         # Persist to database
         if persist_to_db:
-            query = """
-            INSERT OR REPLACE INTO github_trending_snapshots
-            (date, repo_name, repo_url, language, stars_gained, total_stars, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?);
-            """
-            db_client.execute(query, (today_str, repo_name, repo_url, language, stars_gained, total_stars, description))
+            try:
+                query = """
+                INSERT OR REPLACE INTO github_trending_snapshots
+                (date, repo_name, repo_url, language, stars_gained, total_stars, description)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                """
+                db_client.execute(query, (today_str, repo_name, repo_url, language, stars_gained, total_stars, description))
+            except Exception as db_err:
+                logger.warning(f"Could not persist github snapshot for {repo_name}: {db_err}")
 
         snapshots.append({
             "repo_name": repo_name,
@@ -145,8 +149,9 @@ def fetch_huggingface_papers(persist_to_db: bool = True) -> List[Dict[str, Any]]
         if resp.status_code == 200:
             papers_data = resp.json()
             if isinstance(papers_data, list):
-                # Sort by upvotes descending
+                # Sort by upvotes descending and cap to top 15
                 papers_data.sort(key=lambda p: p.get("paper", {}).get("upvotes", 0) if isinstance(p.get("paper"), dict) else p.get("upvotes", 0), reverse=True)
+                papers_data = papers_data[:15]
                 for item in papers_data:
                     paper_obj = item.get("paper", item)
                     paper_id = paper_obj.get("id") or item.get("id", "")
@@ -157,12 +162,15 @@ def fetch_huggingface_papers(persist_to_db: bool = True) -> List[Dict[str, Any]]
                     published_at = paper_obj.get("publishedAt", datetime.now(timezone.utc).isoformat())
 
                     if persist_to_db and paper_id and title:
-                        query = """
-                        INSERT OR REPLACE INTO research_paper_snapshots
-                        (date, paper_id, title, url, upvotes, summary, source)
-                        VALUES (?, ?, ?, ?, ?, ?, ?);
-                        """
-                        db_client.execute(query, (today_str, f"hf_{paper_id}", title, paper_url, upvotes, summary[:500], "HuggingFace"))
+                        try:
+                            query = """
+                            INSERT OR REPLACE INTO research_paper_snapshots
+                            (date, paper_id, title, url, upvotes, summary, source)
+                            VALUES (?, ?, ?, ?, ?, ?, ?);
+                            """
+                            db_client.execute(query, (today_str, f"hf_{paper_id}", title, paper_url, upvotes, summary[:500], "HuggingFace"))
+                        except Exception as db_err:
+                            logger.warning(f"Could not persist HF paper snapshot for {paper_id}: {db_err}")
 
                     if title:
                         headline = f"HUGGING FACE RADAR: {title} (▲ {upvotes} upvotes)"
@@ -229,7 +237,7 @@ def fetch_arxiv_radar(persist_to_db: bool = True) -> Tuple[List[Dict[str, Any]],
             total_new_papers_count += cat_count
             logger.info(f"arXiv {cat}: found {cat_count} recent papers.")
 
-            for entry in entries:  # Process all entries from arXiv RSS feed
+            for entry in entries[:10]:  # Cap to top 10 newest papers per category
                 raw_title = entry.get("title", "")
                 # Clean arXiv title format e.g. "Title. (arXiv:2401.xxxx [cs.AI])"
                 clean_title = re.sub(r"\(arXiv:[^)]+\)", "", raw_title).strip()
@@ -244,12 +252,15 @@ def fetch_arxiv_radar(persist_to_db: bool = True) -> Tuple[List[Dict[str, Any]],
                 published_at = entry.get("published", datetime.now(timezone.utc).isoformat())
 
                 if persist_to_db:
-                    query = """
-                    INSERT OR REPLACE INTO research_paper_snapshots
-                    (date, paper_id, title, url, upvotes, summary, source)
-                    VALUES (?, ?, ?, ?, ?, ?, ?);
-                    """
-                    db_client.execute(query, (today_str, f"arxiv_{paper_id}", clean_title, link, 0, clean_summary[:500], "arXiv"))
+                    try:
+                        query = """
+                        INSERT OR REPLACE INTO research_paper_snapshots
+                        (date, paper_id, title, url, upvotes, summary, source)
+                        VALUES (?, ?, ?, ?, ?, ?, ?);
+                        """
+                        db_client.execute(query, (today_str, f"arxiv_{paper_id}", clean_title, link, 0, clean_summary[:500], "arXiv"))
+                    except Exception as db_err:
+                        logger.warning(f"Could not persist arXiv snapshot for {paper_id}: {db_err}")
 
                 headline = f"ARXIV PREPRINT [{cat}]: {clean_title}"
                 intel_items.append(make_raw_intel_item(

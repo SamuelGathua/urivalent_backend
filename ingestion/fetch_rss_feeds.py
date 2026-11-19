@@ -8,6 +8,11 @@ import feedparser
 from bs4 import BeautifulSoup
 
 from ingestion.models import make_raw_intel_item
+from ingestion.fetch_lab_scrapers import (
+    scrape_meta_ai_blog,
+    scrape_anthropic_news,
+    scrape_mistral_news
+)
 
 logger = logging.getLogger("urivalent.ingestion.rss")
 if not logger.handlers:
@@ -22,18 +27,18 @@ DEFAULT_USER_AGENT = (
 # 1. Official Labs (Badge: LAB)
 OFFICIAL_LAB_FEEDS = [
     {"name": "OpenAI News", "url": "https://openai.com/news/rss.xml", "badge": "LAB"},
-    {"name": "Anthropic Research", "url": "https://www.anthropic.com/news/rss.xml", "badge": "LAB"},
     {"name": "Google DeepMind", "url": "https://deepmind.google/blog/rss.xml", "badge": "LAB"},
-    {"name": "Meta AI", "url": "https://about.fb.com/news/tag/artificial-intelligence/feed/", "badge": "LAB"},
-    {"name": "Mistral AI", "url": "https://mistral.ai/news/index.xml", "badge": "LAB"},
-    {"name": "xAI Blog", "url": "https://x.ai/blog/rss.xml", "badge": "LAB"},
+    {"name": "Mistral AI", "url": "https://mistral.ai/news/rss", "badge": "LAB"},
+    {"name": "Anthropic News", "url": "https://rsshub.bestblogs.dev/anthropic/news", "badge": "LAB"},
+    {"name": "Hugging Face Blog", "url": "https://huggingface.co/blog/feed.xml", "badge": "LAB"},
+    {"name": "BAIR Berkeley AI", "url": "https://bair.berkeley.edu/blog/feed.xml", "badge": "LAB"},
 ]
 
 # 2. Hardware & Deep Tech (Badge: RSS)
 HARDWARE_FEEDS = [
     {"name": "SemiAnalysis", "url": "https://www.semianalysis.com/feed", "badge": "RSS"},
     {"name": "Tom's Hardware", "url": "https://www.tomshardware.com/feeds/all", "badge": "RSS"},
-    {"name": "AnandTech", "url": "https://www.anandtech.com/rss/", "badge": "RSS"},
+    {"name": "Ars Technica Tech Lab", "url": "https://feeds.arstechnica.com/arstechnica/technology-lab", "badge": "RSS"},
     {"name": "IEEE Spectrum Computing", "url": "https://spectrum.ieee.org/feeds/topic/computing.rss", "badge": "RSS"},
 ]
 
@@ -56,7 +61,6 @@ POLICY_FEEDS = [
     {"name": "EU Digital Strategy", "url": "https://digital-strategy.ec.europa.eu/en/news/rss.xml", "badge": "POLICY"},
     {"name": "Federal Register AI Notices", "url": "https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bterm%5D=artificial+intelligence", "badge": "POLICY"},
     {"name": "UK Gov AI Safety", "url": "https://www.gov.uk/government/organisations/ai-safety-institute.atom", "badge": "POLICY"},
-    {"name": "VentureBeat AI", "url": "https://venturebeat.com/category/ai/feed/", "badge": "RSS"},
     {"name": "TechCrunch AI", "url": "https://techcrunch.com/category/artificial-intelligence/feed/", "badge": "RSS"},
 ]
 
@@ -146,20 +150,55 @@ def parse_feed_safely(feed_info: Dict[str, str], max_items_per_feed: Optional[in
     return items
 
 
-def fetch_rss_feeds(max_per_feed: Optional[int] = None) -> List[Dict[str, Any]]:
+def fetch_rss_feeds(max_per_feed: Optional[int] = 10) -> List[Dict[str, Any]]:
     """
     Stream A Master Runner:
     Polls Official Labs, Hardware, Energy, Substack Curators, and Policy Feeds.
-    Returns normalized RawIntelItem dictionaries without artificial per-feed caps when max_per_feed is None.
+    Defaults to 10 newest items per feed to prevent ingestion floods and quota exhaustion.
+    Includes automated HTML scraper fallbacks for frontier labs lacking native RSS support (Meta AI, Anthropic, Mistral).
     """
     all_items: List[Dict[str, Any]] = []
     logger.info(f"Initiating Stream A RSS ingestion across {len(ALL_RSS_FEEDS)} targeted feeds...")
 
+    anthropic_found = False
+    mistral_found = False
+
     for feed_info in ALL_RSS_FEEDS:
         feed_items = parse_feed_safely(feed_info, max_items_per_feed=max_per_feed)
-        all_items.extend(feed_items)
+        if feed_items:
+            if "Anthropic" in feed_info.get("name", ""):
+                anthropic_found = True
+            elif "Mistral" in feed_info.get("name", ""):
+                mistral_found = True
+            all_items.extend(feed_items)
 
-    logger.info(f"Stream A completed. Scraped {len(all_items)} articles across {len(ALL_RSS_FEEDS)} RSS feeds.")
+    # Frontier Labs Fallback Layer:
+    # 1. Meta AI has no native RSS feed -> Direct HTML Blog Scraper
+    try:
+        meta_items = scrape_meta_ai_blog(max_items=5)
+        all_items.extend(meta_items)
+    except Exception as e:
+        logger.warning(f"Meta AI fallback scraper failed: {e}")
+
+    # 2. Anthropic fallback if RSSHub mirror fails or yields 0 items
+    if not anthropic_found:
+        try:
+            logger.info("Anthropic RSS mirror yielded 0 items; triggering direct HTML fallback scraper...")
+            anthropic_items = scrape_anthropic_news(max_items=5)
+            all_items.extend(anthropic_items)
+        except Exception as e:
+            logger.warning(f"Anthropic fallback scraper failed: {e}")
+
+    # 3. Mistral fallback if native RSS fails or yields 0 items
+    if not mistral_found:
+        try:
+            logger.info("Mistral RSS yielded 0 items; triggering direct HTML fallback scraper...")
+            mistral_items = scrape_mistral_news(max_items=5)
+            all_items.extend(mistral_items)
+        except Exception as e:
+            logger.warning(f"Mistral fallback scraper failed: {e}")
+
+    logger.info(f"Stream A completed. Gathered {len(all_items)} articles across RSS feeds and frontier lab scrapers.")
     return all_items
 
 

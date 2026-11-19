@@ -165,15 +165,18 @@ def fetch_public_ai_basket(tickers: Optional[List[str]] = None, persist_to_db: b
 
             # Persist snapshot to database
             if persist_to_db:
-                query = """
-                INSERT OR REPLACE INTO compute_market_snapshots
-                (date, ticker, company_name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-                """
-                db_client.execute(
-                    query,
-                    (today_str, ticker, name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
-                )
+                try:
+                    query = """
+                    INSERT OR REPLACE INTO compute_market_snapshots
+                    (date, ticker, company_name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """
+                    db_client.execute(
+                        query,
+                        (today_str, ticker, name, category, close_price, change, daily_change_pct, five_day_trend_pct, volume, volume_anomaly)
+                    )
+                except Exception as db_err:
+                    logger.warning(f"Failed to persist market snapshot for {ticker}: {db_err}")
 
             # High-priority alert condition: abs(daily_change_pct) >= 4.0 or volume anomaly
             is_large_move = abs(daily_change_pct) >= 4.0

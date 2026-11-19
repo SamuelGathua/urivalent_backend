@@ -37,7 +37,7 @@ def fetch_from_sources(
     if include_rss:
         try:
             logger.info("Executing Ingestion Stream A (RSS & Atom Feeds)...")
-            rss_items = fetch_rss_feeds(max_per_feed=None)
+            rss_items = fetch_rss_feeds(max_per_feed=10)
             all_raw_items.extend(rss_items)
             logger.info(f"Stream A contributed {len(rss_items)} items.")
         except Exception as e:

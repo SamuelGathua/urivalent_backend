@@ -21,6 +21,11 @@ if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 
+class D1QuotaExceededError(RuntimeError):
+    """Raised when Cloudflare D1 returns code 7500 (daily write limit exceeded)."""
+    pass
+
+
 class DatabaseClient:
     """
     Dual-mode database client for Urivalent.
@@ -87,6 +92,9 @@ class DatabaseClient:
         if not response.ok or not data.get("success", False):
             errors = data.get("errors", [])
             err_msg = f"Cloudflare D1 query error: {errors} (Status: {response.status_code})"
+            if any(isinstance(e, dict) and e.get("code") == 7500 for e in errors):
+                logger.warning(f"D1 Free Tier daily write limit reached (code 7500).")
+                raise D1QuotaExceededError(err_msg)
             logger.error(err_msg)
             raise RuntimeError(err_msg)
 
@@ -95,12 +103,23 @@ class DatabaseClient:
     def execute(self, query: str, params: Union[list, tuple] = ()) -> int:
         """Execute a write/update query. Returns lastrowid or affected rows."""
         if self.use_cf_d1:
-            data = self._d1_request(query, params)
-            result_list = data.get("result", [])
-            if result_list and isinstance(result_list, list):
-                meta = result_list[0].get("meta", {})
-                return meta.get("last_row_id", meta.get("changes", 0))
-            return 0
+            try:
+                data = self._d1_request(query, params)
+                result_list = data.get("result", [])
+                if result_list and isinstance(result_list, list):
+                    meta = result_list[0].get("meta", {})
+                    return meta.get("last_row_id", meta.get("changes", 0))
+                return 0
+            except D1QuotaExceededError:
+                logger.warning("Falling back to local SQLite execution for write query due to D1 quota limit.")
+                conn = self._get_sqlite_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(query, tuple(params) if params else ())
+                    conn.commit()
+                    return cursor.lastrowid or cursor.rowcount
+                finally:
+                    conn.close()
         else:
             conn = self._get_sqlite_connection()
             try:
@@ -114,12 +133,23 @@ class DatabaseClient:
     def fetchall(self, query: str, params: Union[list, tuple] = ()) -> List[Dict[str, Any]]:
         """Execute a read query and return list of dicts."""
         if self.use_cf_d1:
-            data = self._d1_request(query, params)
-            result_list = data.get("result", [])
-            if result_list and isinstance(result_list, list):
-                rows = result_list[0].get("results", [])
-                return [dict(row) for row in rows]
-            return []
+            try:
+                data = self._d1_request(query, params)
+                result_list = data.get("result", [])
+                if result_list and isinstance(result_list, list):
+                    rows = result_list[0].get("results", [])
+                    return [dict(row) for row in rows]
+                return []
+            except Exception as e:
+                logger.warning(f"D1 fetchall failed ({e}). Falling back to local SQLite.")
+                conn = self._get_sqlite_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute(query, tuple(params) if params else ())
+                    rows = cursor.fetchall()
+                    return [dict(row) for row in rows]
+                finally:
+                    conn.close()
         else:
             conn = self._get_sqlite_connection()
             try:
@@ -141,9 +171,32 @@ class DatabaseClient:
             return 0
         if self.use_cf_d1:
             count = 0
+            fallback_to_sqlite = False
             for params in params_list:
-                self.execute(query, params)
-                count += 1
+                if fallback_to_sqlite:
+                    conn = self._get_sqlite_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute(query, tuple(params) if params else ())
+                        conn.commit()
+                        count += 1
+                    finally:
+                        conn.close()
+                    continue
+                try:
+                    self.execute(query, params)
+                    count += 1
+                except D1QuotaExceededError:
+                    fallback_to_sqlite = True
+                    logger.warning("D1 quota reached during executemany; diverting batch to local SQLite.")
+                    conn = self._get_sqlite_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute(query, tuple(params) if params else ())
+                        conn.commit()
+                        count += 1
+                    finally:
+                        conn.close()
             return count
         else:
             conn = self._get_sqlite_connection()
